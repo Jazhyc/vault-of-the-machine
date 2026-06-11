@@ -47,7 +47,7 @@ const GEO = {
   acoReceiver: new THREE.BoxGeometry(0.26, 0.3, 0.5),
   acoBarrel: new THREE.CylinderGeometry(0.12, 0.16, 1.1, 6).rotateX(Math.PI / 2),
   acoMuzzle: new THREE.CylinderGeometry(0.06, 0.11, 0.22, 6).rotateX(Math.PI / 2),
-  // keeper — armored construct elite (also the herald, which just hovers)
+  // keeper — armored construct elite (also the herald, which hangs inverted in the sky)
   keepLeg: new THREE.CylinderGeometry(0.26, 0.4, 1.3, 6),
   keepPelvis: new THREE.BoxGeometry(1.2, 0.5, 0.8),
   keepBody: new THREE.CylinderGeometry(1.0, 0.65, 1.5, 8),
@@ -418,6 +418,14 @@ export class EnemyManager {
         const hpBar = e.ty === 'keeper' ? makeHpBar() : null; // blisters stay unlabeled
         if (hpBar) { hpBar.spr.position.y = 4.1; group.add(hpBar.spr); }
         let shield = null;
+        // only the sky herald carries a ward health pool — that marks it here.
+        // It hangs head-down: upright at 19 m the body hides the crit head from
+        // everyone below, and inverted levitation reads as held aloft rather
+        // than a statue floating on nothing. Roll (z), not pitch, so forward
+        // stays +z and the per-frame yaw still faces normally; the flip also
+        // drops the hp-bar child to just under the dangling head.
+        const sky = e.ty === 'keeper' && e.shp != null;
+        if (sky) group.rotation.z = Math.PI;
         if (e.ty === 'keeper') {
           // color-coded ward: bubble + waist trim in the keeper's pedestal color
           const ci = e.cl ?? 0;
@@ -446,7 +454,7 @@ export class EnemyManager {
           this.scene.add(group);
         }
         this.targets.push(group);
-        v = { group, interp: new Interp(), hpBar, shield, ty: e.ty, bornAt: this.t };
+        v = { group, interp: new Interp(), hpBar, shield, ty: e.ty, sky, bornAt: this.t };
         this.views.set(e.id, v);
         if (this.onSpawn && e.ty !== 'blister') this.onSpawn(e.ty); // sfx hook
       }
@@ -507,6 +515,12 @@ export class EnemyManager {
       const s = v.interp.at(renderTime);
       if (!s) continue;
       v.group.position.set(s.p[0], s.p[1], s.p[2]);
+      if (v.sky) {
+        // inverted, so the group origin is the upturned feet: lift by the body
+        // height (~4) to keep the dangling head where the feet stood — clear of
+        // the boss hull below (top ≈ y17.5) — and bob slowly to sell the hang
+        v.group.position.y += 4 + Math.sin(this.t * 1.1) * 0.3;
+      }
       if (v.ty === 'seeker') {
         // a 3D flier: aim the dart along its snapshot-to-snapshot flight path
         // (yaw alone can't pitch it); keep the old heading while data is thin

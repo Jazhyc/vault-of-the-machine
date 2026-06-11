@@ -78,6 +78,7 @@ export class Effects {
 
     this.numQueue = [];
     this.shakeAmt = 0;
+    this.shakeBudget = 1; // per-frame growth cap (see shake)
   }
 
   paintNumber(n, text, kind) {
@@ -187,7 +188,15 @@ export class Effects {
     s.life = 0.12;
   }
 
-  shake(amt) { this.shakeAmt = Math.min(1.2, this.shakeAmt + amt); }
+  // Growth is budgeted per frame (reset in update): net bursts at high ping
+  // can land several shake events between frames; the budget admits the
+  // biggest single event (oblit, 1.0) but stops clumps slamming the 1.2 cap.
+  shake(amt) {
+    amt = Math.min(amt, this.shakeBudget);
+    if (amt <= 0) return;
+    this.shakeBudget -= amt;
+    this.shakeAmt = Math.min(1.2, this.shakeAmt + amt);
+  }
 
   applyShake(camera) {
     if (this.shakeAmt <= 0.001) return;
@@ -197,6 +206,7 @@ export class Effects {
   }
 
   update(dt) {
+    this.shakeBudget = 1;
     this.shakeAmt = Math.max(0, this.shakeAmt - dt * 3);
     for (let k = 0; k < 3 && this.numQueue.length; k++) this.showNumber(this.numQueue.shift());
     for (const n of this.numbers) {

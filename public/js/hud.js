@@ -11,7 +11,7 @@ export class Hud {
   constructor() {
     this.el = {
       hud: $('hud'), bossbar: $('bossbar'), bossname: $('bossname'), bossfill: $('bossbarFill'),
-      immune: $('immuneTag'), phase: $('phaseLine'), announce: $('announce'),
+      immune: $('immuneTag'), shieldPanel: $('bossShieldPanel'), phase: $('phaseLine'), announce: $('announce'),
       announceMain: $('announceMain'), announceSub: $('announceSub'),
       toasts: $('toasts'), prompt: $('prompt'), readyOuter: $('readyBarOuter'), readyFill: $('readyBarFill'),
       hpFill: $('hpBarFill'), superRing: $('superRing'), superPct: $('superPct'), buffs: $('buffs'),
@@ -167,7 +167,15 @@ export class Hud {
     if (showBoss && enc.bossMax > 0) {
       this.el.bossfill.style.width = `${(enc.bossHp / enc.bossMax) * 100}%`;
       this.el.bossfill.classList.toggle('final', enc.st === 'FINAL');
-      this.el.immune.classList.toggle('hidden', !enc.shield || enc.bossDead);
+      const shieldOn = enc.shield && !enc.bossDead;
+      this.el.immune.classList.toggle('hidden', !shieldOn);
+      // ward panel: full while ordinarily immune; during the generator surge
+      // it drains right-to-left with the time left (per-frame off server time)
+      this.el.shieldPanel.classList.toggle('hidden', !shieldOn);
+      if (shieldOn) {
+        const frac = enc.sg ? Math.max(0, Math.min(1, (enc.sg - serverNow) / ENC.surgeDur)) : 1;
+        this.el.shieldPanel.style.width = `${frac * 100}%`;
+      }
     }
 
     // phase line

@@ -22,6 +22,7 @@ export class LocalPlayer {
     this.bobT = 0;
     this.recoilP = 0; this.recoilY = 0;   // applied camera recoil (chases the target)
     this.recoilTP = 0; this.recoilTY = 0; // recoil target — kicks add here, eases back to 0
+    this.impBudget = PLAYER.kbFrameCap;   // per-frame knockback budget (see impulse)
 
     // mirrored server state
     this.hp = PLAYER.maxHp;
@@ -61,7 +62,17 @@ export class LocalPlayer {
   get golden() { return this.goldenUntil > (this.serverNow || 0); }
   get wardbreak() { return (this.wardUntil || 0) > (this.serverNow || 0); }
 
-  impulse(v) { this.vel.x += v[0]; this.vel.y += v[1]; this.vel.z += v[2]; }
+  // Budgeted per frame (PLAYER.kbFrameCap, reset in update): TCP clumping at
+  // high ping can deliver several shoves between frames; the sum is scaled
+  // down so a clump never out-throws the strongest single hit.
+  impulse(v) {
+    const mag = Math.hypot(v[0], v[1], v[2]);
+    if (mag < 0.001) return;
+    const s = Math.min(1, this.impBudget / mag);
+    if (s <= 0) return;
+    this.impBudget -= mag * s;
+    this.vel.x += v[0] * s; this.vel.y += v[1] * s; this.vel.z += v[2] * s;
+  }
 
   teleportToSpawn() {
     this.pos.set(...ARENA.spawn);
@@ -71,6 +82,7 @@ export class LocalPlayer {
   }
 
   update(dt, now) {
+    this.impBudget = PLAYER.kbFrameCap;
     const k = this.keys;
     let fx = 0, fz = 0;
     if (this.alive && document.pointerLockElement) {

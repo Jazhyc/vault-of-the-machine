@@ -51,20 +51,24 @@ damage path needs a cap or validation server-side, and ideally a test like the e
 from full inside `start` m linearly down to `min`× at `range`; its `DMG_CAPS` entry covers the
 point-blank maximum.
 
-Grenades are per-class (`GRENADE` in shared/constants.js: shared `cd/speed/fuse`, per-class blast
-numbers; class-colored client-side — projectile, boom, and the remote `pf`/`explosion` renders
-look the thrower's class up in the snapshot). The server resolves `explode {kind:'grenade'}` dmg/r
-from `p.cls`. Payloads: **gunslinger** — biggest blast, then four client-side homing embers reuse
-the wolfpack machinery (`spawnSwarm` in weapons.js targets the nearest damageable enemies, boss as
-backstop) and land as ordinary `hit`s with weapon `gswarm` (capped in `DMG_CAPS`). **voidcaller**
-— smaller blast plus a server-side DoT zone (`game.dots`, 0.5 s flat-damage ticks inside `orb.r`
-for `orb.dur`; total ≈ 2× the gunslinger's total, asserted in tests); broadcast `voidOrb
-{p, r, dur}` drives the pooled client orb FX, and the thrower's client mirrors the ticks as
-predicted damage numbers. **sentinel** — zero damage; the burst splits into two server-simulated
-mend-orbs (snapshot `projs` kind `heal`) that perfect-track the two lowest-HP guardians (picked at
-the split), starting at walk speed and accelerating; contact heals `heal.amount` (clamped) and
-broadcasts `healBurst {id, p, amt}` (cyan pop + `+hp` number; pickup chime if it's you).
-`tickProjectiles`/`tickDots` now run in every state — mend-orbs must fly even in LOBBY.
+Knockback is client-computed where an FX broadcast allows it: the `bossSlam`/`seekerBoom`
+handlers in main.js shove the local player from their own live position (the server's view is an
+RTT stale) using the shared `kb` tuning (`ENC.slamKb`, `ENEMIES.*.kb`); the `hurt` message's
+`imp` is applied as an impulse only for sources without such an event (husk melee) and otherwise
+only aims the hurt-pan. Two client-side burst clamps tame TCP clumping at high ping (several
+messages landing in one frame): `player.impulse` budgets the per-frame summed shove
+(`PLAYER.kbFrameCap`) and `effects.shake` budgets per-frame growth.
+
+Grenades are per-class (`GRENADE` in shared/constants.js, which also documents the per-class
+damage budget); the server resolves `explode {kind:'grenade'}` dmg/r from `p.cls`, and everything
+is class-colored client-side (the remote `pf`/`explosion` renders look the thrower's class up in
+the snapshot). Payloads: **gunslinger** — four client-side homing embers (`spawnSwarm` in
+weapons.js, wolfpack machinery) landing as ordinary `hit`s with weapon `gswarm`; **voidcaller** —
+a server-side DoT zone (`game.dots`; broadcast `voidOrb {p, r, dur}` drives the client FX, and
+the thrower's client mirrors the ticks as predicted damage numbers); **sentinel** — two
+server-simulated mend-orbs (snapshot `projs` kind `heal`) that chase the lowest-HP guardians and
+broadcast `healBurst {id, p, amt}` on contact.
+`tickProjectiles`/`tickDots` run in every state — mend-orbs must fly even in LOBBY.
 
 Protocol: JSON over one ws connection. Snapshots broadcast at 10 Hz (`broadcastSnapshot`); clients
 interpolate remote entities ~130 ms behind arrival time (`Interp` in `enemies.js`). One-shot events
@@ -80,7 +84,9 @@ fields are abbreviated: `p` pos, `dn` downed, `dd` dead, `gu` goldenUntil, `av` 
 `ky` holds auric key, `wb` wardbreaker-buff end, `rv/rt` revive end/target, `sup` super %. `enc.focus` is the hard-focused
 player id (DAMAGE only) and `enc.bossYaw` is the server-owned boss facing (clients lerp to it —
 every client must see the same back side); `enc.stage` is the MECH sub-stage, `enc.wh/mAt` the
-wormhole flag and missile-impact time, and `enc.sig` the round's sigil layout (`c` colors, `o`
+wormhole flag and missile-impact time, `enc.sg` the generator-surge end time (the HUD's
+translucent boss-bar ward panel shows full while ordinarily shielded and drains right-to-left
+toward `sg` during the surge), and `enc.sig` the round's sigil layout (`c` colors, `o`
 pillar owners, `s` pillar segments, `g` 9-bit lattice mask, `m` matched flags, `ga` the panel's
 resting sky-ring angle). `enc.sweep`
 carries `a1/a2/w1/w2/on` — the constant angular velocities let the client extrapolate the beam
@@ -93,10 +99,9 @@ are id-keyed pickup lists like `bricks`; `banner` is a one-off object like `ches
 snapshots are absolute server seconds; the client keeps `serverOffset` from `snap.now`.
 
 The `bossDied` and `wipe` events carry a per-player `stats` scoreboard — `{name, cls, kills, dmg,
-keepers}`, sorted by boss damage server-side — rendered as the `#endStats` table on the end screen
-(`hud.endScreen(kind, stats)`). The server tracks `p.stats`: `killEnemy` credits kills/keepers,
+keepers}`, sorted by boss damage server-side — rendered by `hud.endScreen(kind, stats)`.
 `applyBossDamage` credits only damage that actually lands (nothing while shielded, no overkill
-past 0), and `startEncounter` resets the board for everyone.
+past 0); `startEncounter` resets the board.
 
 Player-facing text (toasts/announcements) is flavor-first AND terse, by explicit user
 preference: hint through fiction ("the blisters quiver"), never bare instructions ("shoot the
@@ -108,120 +113,83 @@ changes) get no server toast. Status readouts (lock names, code counts, timers) 
 ### Encounter state machine (server)
 
 `LOBBY → MECH (sigil mechanic, below) → DAMAGE (25s) → OBLIT → MECH round+1 … → FINAL (≤25% HP,
-notched on the boss bar) → VICTORY | WIPE`. LOBBY has the **rally banner** (`ENC.banner`): the
-white circle near spawn (always-in-scene ring in `EntityManager`, visible only while LOBBY runs
-bannerless) takes an `interact` to plant `game.banner`, then each guardian's `interact` within
-`restockR` earns ONE private `restock` (`p.restocked`, re-armed in `resetToLobby`) — the server
-fills the super gauge (`gainSuper(p, 100)`; `sup` is server-owned) and the rest of the refill is
-client-side (`WeaponSystem.restock()`: full mags, reserves to `maxReserves`,
-grenade/melee cooldowns cleared; `bannerRallied` in `main.js` gates the prompt). Everything is
-LOBBY-gated server-side; the banner object itself dies with `resetWorld`. MECH runs the
-**sky-sigil mechanic** through
-`enc.stage`: `null` (keepers stirring, `firstKeeperDelay`) → `KEEPERS` → `HUNT` → `FINAL` →
-`MISSILE`. Each round `rollSigil()` deals the three pedestal colors out as [twin A, twin B,
-herald] and splits the six pillars 3/3 between the twins, each pillar showing one straight 2-3
-node segment of the 3x3 sky lattice on its outward panel. Two warded (immune — `e.shielded`
-checked in `onHit`/`onExplode`) color-coded Keepers spawn together from different gates; shooting
-lattice stars toggles them (`sigil {i}`), and when the lit set exactly equals a twin's overlaid
-code the lattice resets, the matcher earns `SUPER.perSigil`, and a **lattice strike** is
-scheduled (`enc.strikes`, fires `strikeDelay` later in `fireStrikes`): the ward breaks at the
-blast, which also deals `strikeDmg` to every UNwarded enemy within `strikeR` of the keeper
-(one-shots the other twin only if its ward is already down; the struck keeper itself is excluded
-— its ward soaked the blast). `sigilMatch` carries `code`+`kid` so the client can run the
-matching FX (stars beam into a focal dot in front of the lattice, the dot lasers the keeper,
-`sigilBlast` lands as the boom — same `strikeDelay` clock on both ends). The codes are
-guaranteed distinct and match order-free. While the ciphers are live (stage `KEEPERS` only) the
-boss **grabs the panel**: every `sigil.grabCd` (10 s, −`grabCdStep` per round, floor `grabCdMin`)
-`fireGrab` rolls a swing of |N(`grabRotMean` π/2, `grabRotSd`)| rad (clamped
-`grabRotMin..grabRotMax`, random direction — the tails hurl it across the whole arena), tracks the
-resting spot in `enc.grabAngle` (reset north in `spawnKeepers`; snapshot `sig.ga` re-syncs
-late/lossy clients), and broadcasts `latticeGrab {at, dur, seed, a0, a1}`. A tether beam drags the
-lattice along the arena's 55 m sky-ring while it jerks between seeded waypoints (`grabHash` every
-`grabStep`, ±`grabJitter` wobble) — the panel always `lookAt`s the arena so codes stay readable,
-and it RESTS where it lands. Position is cosmetic to the server (clients report node indices), so
-each client replays the identical arc off server time in `world.update`; the strike-rig focal dot
-is computed per match from the panel's current spot (`rig.focus`). The lattice itself got a
-backing plate, border, and side handles (`sigil.handles`, the tether anchor) in
-`buildSigilLattice`; none of them are raycast targets. Both twins dead → the warded herald (`e.sky`, hovers at
-`ENC.sigil.finalPos`) rises above the boss. Its ward is a destructible shield (`e.shieldHp`,
-deliberately weak: `sigil.shieldHp + shieldPerPlayer×(n−1)`) that only wardbreaker-blessed fire
-can wound: standing within `ENC.sigil.pedestalR` of *its* color's pedestal grants `p.wardUntil`
-(`wardBuffDur`, refreshed while standing, travels with you). The herald itself is never damaged
-directly — when the ward's HP hits zero, `blastWard` detonates it and kills the herald
-(`wardBlast` broadcast → nova boom client-side). Herald dead → wormhole
-opens (`enc.wh`), and `missileFall` seconds later the lance impact broadcasts `missile` (blue
-flash + nova boom client-side) and calls `enterDamage` (which `clearAdds()`s). The wormhole stays
-open through DAMAGE — antiviral capsules visually fall from it — and seals at `enterOblit` (and
-in every other phase-entry/wipe path, same hygiene as `sweep`/`barrageUntil`). `enc.keeperIds` is
-slot-aligned with `sig.codes` — null dead slots, never compact. Fireteam is 1–6 (`MAX_PLAYERS`).
-Per-player
-scaling: boss HP (`bossBase + bossPerPlayer×(n−1)`, rolled at encounter start), keeper HP,
-wave sizes (2n husks + n acolytes per wave, round-padded, per-player caps), and the live-add
-ceiling (`addCapBase + addCapPer×n`). Enemy bolts and boss volleys lead the target: the server
-estimates each player's horizontal velocity from `state` messages (`p.vel`, teleports
-discarded) and `leadAim` aims `ENC.leadFactor` of the flight time ahead, capped at
-`ENC.leadMax` seconds — uncapped, slow projectiles aimed seconds ahead, which looked like
-firing perpendicular to the player. Volley dodge design: `volleySpeed` 22 is deliberately too
-fast to outrun — you dodge by standing in the gaps between the three orbs, and `volleySpread`
-0.2 keeps those gaps standable at range (~1.4 m corridor at 25 m, closing to zero up close,
-given the 1.8 m combined hit radius). Volley cadence tightens per phase
-(`volleyCdMech/Dmg/Final` 5/3/2 s) so round-1 DPS still pressures the marked player.
+notched on the boss bar) → VICTORY | WIPE`.
 
-**Seekers** (back-launched homing missiles) are the boss's other basic attack, active from round
-1: every `seekerCd` during MECH/DAMAGE/FINAL, `launchSeekers` fans a salvo off the boss's back
-(`seekerBase` 2, +1 per phase entry via `enc.seekerBonus` — bumped in `enterMech` round>1,
-`enterDamage`, `enterFinal`; reset only by `resetWorld`). Each missile picks a random living
-player, except during DAMAGE where the whole salvo hunts `enc.focus` (same focus-or-random
-fallback as the volleys). They are ENEMIES (`type: 'seeker'`, hp
-90) so the whole shoot-down path is free: client raycast hits, `DMG_CAPS`, damage numbers, crit
-warhead nose — but deliberately NO hp bar (bars are keeper-only; it reads as ordnance). Each
-missile climbs a `seekerPop` launch arc, then `tickSeeker` homes on its assigned player's chest
-with perfect accuracy at `speed` 8.5 (walk 8 < seeker < sprint 12.5 — walking can't escape one,
-sprinting can, and `seekerLife` expires the ones a sprinter strings along).
-Detonation (`detonateSeeker` → `seekerBoom` broadcast: reached ANY player within 1 m, pillar,
-arena wall, floor, or expiry) splashes `dmg` in `blastR`; shot-down seekers go through `killEnemy`
-(normal `enemyDied`, no blast, no ammo drops) and **chain**: the kill deals `chainDmg` to every
-seeker within `chainR`, each cooked one popping `chainFuse` later via the same harmless
-`killEnemy` path (`cookAt/cookBy` on the enemy — the instigator keeps earning `perKill` super
-down the chain). Detonations on players/terrain deliberately do NOT chain: converging missiles
-would defuse each other on the first impact. Seekers are excluded from the wave add-cap count
-and the separation pass, and splash height checks use their real y (like blisters — mirrored in
-weapons.js). Client: `buildSeeker` view orients along the interp flight delta (yaw alone can't
-pitch); the toast fires once per encounter (`enc.seekerSeen`).
+**Phase-entry hygiene**: every phase entry (`enterMech/Damage/Oblit/Final`, `victory`,
+`startWipe`) routes through `clearPhaseFx()`, which kills `sweep`/`barrageUntil`, the MECH
+`stage`, pending strikes, and the wormhole (`enterDamage` alone keeps the wormhole — it hangs
+open through the phase and seals at the next entry). Put any new cross-phase boss state in that
+helper, not in the individual entries; the "phase entries clear running specials" test asserts
+no leaks. The viral counterpart is `endViralPhase()`: clears focus/capsules/stacks (and keys,
+unless called from `enterOblit`, where keys stay usable through the warning).
 
-3 immune `blister` enemies ride the boss's back for the whole encounter: spawned at
-`startEncounter` on `ENC.blisterMounts`, re-glued every `tickBoss` from `enc.bossYaw` (the boss
-turns toward the focus during DAMAGE, else the nearest player). The client parents blister views
-to the boss group — anything reading enemy positions client-side must use `getWorldPosition`
-(see weapons.js wolves), and the server splash check uses the blister's real height. `clearAdds`
-deliberately preserves blisters; burst ones never regrow.
+LOBBY has the **rally banner** (`ENC.banner`): one `interact` on the white circle plants it,
+then each guardian's `interact` within `restockR` earns ONE private `restock` (`p.restocked`) —
+the server fills the super gauge (`sup` is server-owned); mags/reserves/cooldowns refill
+client-side (`WeaponSystem.restock()`, prompt gated by `bannerRallied` in `main.js`). All
+LOBBY-gated server-side; the banner dies with `resetWorld`.
 
-DAMAGE runs the viral mechanic: the boss hard-focuses a random player (`enc.focus`, re-picked if
-they fall, volleys aim at them) and chains its round-unlocked specials hasted ×1.3
-(`dmgSpecialCd`). 2 capsules rain every 5 s (`caps`, pickable once landed); 3 capsule stacks
-(`p.antiviral`) let that player damage blisters (checked in `onHit`/`onExplode` — one splash can
-burst several). A burst blister flings an auric key (`keys`) outward; the key-holder (`p.hasKey`)
-wakes a refuge well by walking to an intact pedestal (DAMAGE/OBLIT only). Wells NO LONGER
-auto-spawn at OBLIT — only key-woken wells shelter, the blast is lethal to anyone unsheltered
-(`oblitDmg` 9999; `fireOblit` early-returns if that wiped everyone), and `fireOblit` burns every
-woken well into `enc.burned` permanently (the client drops that pedestal's crystal to the floor).
-FINAL chains specials ×1.5 on `finalSpecialCd` and lets them overlap (sweep + barrage + volleys
-at once). Escalation is round-driven: round ≥2 keepers spawn orbiting Wisps and the boss gains
-the rhythmic barrage; round ≥3 adds the sweep-laser arena partition (spawning pauses while
-`enc.sweep` is set during MECH). Barrage rings spiral: each ring's heading curls at `pr.w`
-(`barrageCurl`, decaying via `barrageCurlDecay` so the arm straightens and dies on the wall;
-spin direction `enc.barrageDir` re-rolled per cast) and rides a beat-locked vertical sine
-around `barrageY` (`bobF/bobPh/bobT0` on the proj — one full cycle per two beats, alternate
-rings antiphase). The 1.4–2.4 m band deliberately overlaps both a grounded and a single-jumping
-hull (apex ~1.8 m) — you dodge sideways through the gaps, not by jumping. `tickProjectiles`
-pins the exact sine into `p[1]` and its derivative into `v[1]` each tick so the client's linear
-`p + v·age` extrapolation tracks it between snapshots. The client `hell` style is an orange
-core in a spinning additive wire cage (`buildProjMesh` in entities.js, warmed at boot with the
-other shared proj assets).
-Phase-entry methods (`enterDamage`, `enterOblit`, `enterFinal`, `victory`, `startWipe`) must clear
-`sweep`/`barrageUntil` — bugs here leak boss specials across phases. The same applies to the viral
-mechanic: `endViralPhase()` clears focus/capsules/stacks (and keys, unless called from
-`enterOblit` where keys stay usable through the warning).
+MECH runs the **sky-sigil mechanic** through `enc.stage`: `null` (keepers stirring) → `KEEPERS`
+→ `HUNT` → `FINAL` → `MISSILE`. `rollSigil()` (shared/sigil.js) deals the pedestal colors out as
+[twin A, twin B, herald] and gives each of the six pillars one lattice segment; the twin codes
+are guaranteed distinct and match order-free. Two warded Keepers spawn (`e.shielded` — immune in
+`onHit`/`onExplode`); shooting lattice stars sends `sigil {i}`, and an exact code match schedules
+a **lattice strike** (`enc.strikes` → `fireStrikes`): the ward breaks at the blast, which also
+one-shots UNwarded enemies within `strikeR` (the struck keeper itself is excluded — its ward
+soaked it). `sigilMatch` carries `code`+`kid` so the client FX and the server blast share the
+same `strikeDelay` clock. While stage is `KEEPERS` the boss periodically **grabs the panel** and
+hurls it around the 55 m sky-ring (`fireGrab`; tuning + design rationale commented in
+`ENC.sigil`): position is cosmetic to the server, so the `latticeGrab {at, dur, seed, a0, a1}`
+broadcast lets every client replay the identical seeded arc off server time (`world.update`;
+snapshot `sig.ga` re-homes late/lossy clients). Both twins dead → the warded herald (`e.sky`)
+rises: its ward is a deliberately weak destructible shield (`e.shieldHp`) that only
+wardbreaker-blessed fire wounds (stand within `pedestalR` of *its* color's pedestal for
+`p.wardUntil`); at zero, `blastWard` detonates ward and herald together — the herald is never
+damaged directly. Herald dead → wormhole (`enc.wh`) → `missileFall` s later the lance impact
+calls `enterDamage`. `enc.keeperIds` is slot-aligned with `sig.codes` — null dead slots, never
+compact.
+
+DAMAGE runs the **viral mechanic**: the boss hard-focuses one player (`enc.focus`, re-picked if
+they fall; volleys and seeker salvos converge on them) and chains its round-unlocked specials
+hasted. Capsules rain (`caps`, pickable once landed); 3 stacks (`p.antiviral`) let that player
+burst the back-mounted blisters (checked in `onHit`/`onExplode` — one splash can burst several);
+a burst blister flings an auric key (`keys`); the key-holder wakes a refuge well at an intact
+pedestal (DAMAGE/OBLIT only). Wells do NOT auto-spawn at OBLIT: only key-woken wells shelter the
+otherwise-lethal blast (`oblitDmg`), and `fireOblit` burns every woken well into `enc.burned`
+permanently. FINAL opens with the **generator surge** (`enc.surgeUntil`): the shield reignites
+(boss immune via `applyBossDamage`'s existing `e.shield` gate), one sweep spins for the whole
+surge (`sweep.until = surgeUntil`) and a seeker burst launches every `surgeWaveCd` — each burst
+is `max(1, floor(alive/2))` waves rippling `surgeWaveGap` apart (`surgeWavesLeft/surgeWaveAt`,
+cleared by `clearPhaseFx` and surge expiry), targets dealt round-robin so every guardian is
+hunted (wave size never below the fireteam). Volley/special
+timers are parked past `surgeUntil`, `ends` (annihilation) counts from surge end, and `tickBoss`
+drops the shield on expiry and re-broadcasts `shieldBreak` (the client announces the generator
+dying when its last-known phase is FINAL). After the surge, FINAL chains specials faster and
+lets them overlap (sweep + barrage + volleys at once). Escalation is round-driven: round ≥2 keepers gain orbiting Wisps and the boss gains the
+rhythmic barrage; round ≥3 adds the sweep-laser partition (spawning pauses while `enc.sweep` is
+set during MECH). Attack design rationale (volley gap dodging, the barrage bob band, the seeker
+speed window, lead-aim caps) lives as comments on the numbers in `ENC`/`ENEMIES` in
+shared/constants.js — read those before retuning anything.
+
+**Seekers** (back-launched homing missiles, active from round 1) are shootable ENEMIES
+(`type: 'seeker'`) so the whole shoot-down path is free — client raycasts, `DMG_CAPS`, damage
+numbers, crit nose — but deliberately NO hp bar (bars are keeper-only; it reads as ordnance).
+Salvo size grows +1 per phase entry (`enc.seekerBonus`, reset only by `resetWorld`). Shot-down
+seekers chain-cook nearby ones through `killEnemy`; detonations on players/terrain
+(`detonateSeeker`) deliberately do NOT chain (see the comment in `killEnemy`). Seekers are
+excluded from the wave add-cap count and the separation pass, and splash height checks use
+their real y (like blisters — mirrored in weapons.js).
+
+3 immune `blister` enemies ride the boss's back for the whole encounter, re-glued every
+`tickBoss` from `enc.bossYaw`. The client parents blister views to the boss group — anything
+reading enemy positions client-side must use `getWorldPosition` (see weapons.js wolves), and the
+server splash check uses the blister's real height. `clearAdds` deliberately preserves blisters;
+burst ones never regrow.
+
+Fireteam is 1–6 (`MAX_PLAYERS`); boss HP (rolled at encounter start), keeper HP, wave sizes, and
+the live-add ceiling all scale per player (knobs in `ENC`). Enemy bolts and boss volleys lead
+the target: `fireProjAt`/`leadAim` aim ahead along `p.vel` (estimated from `state` messages,
+teleports discarded), capped at `ENC.leadMax` seconds.
 
 Gjallarhorn is unlocked **per guardian name**, not per server: only looting the victory cache adds
 the name to `game.gjallyOwners` (persisted as `{gjallyNames}` in `.unlocks.json` via

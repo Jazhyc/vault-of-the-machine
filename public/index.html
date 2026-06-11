@@ -112,6 +112,10 @@
   #bossbarFill.final { background: linear-gradient(90deg, #d00000, #ff6d00); animation: pulse 0.7s infinite alternate; }
   #bossbarMark { position: absolute; top: -3px; bottom: -3px; width: 2px; background: #ff6d00;
     box-shadow: 0 0 6px #ff6d00; opacity: .85; }
+  /* translucent ward over the bar while the boss is immune; during the
+     generator surge its width drains right-to-left with the time left */
+  #bossShieldPanel { position: absolute; left: 0; top: 0; bottom: 0; width: 100%; pointer-events: none;
+    background: rgba(125,95,255,0.34); box-shadow: inset 0 0 8px rgba(125,95,255,0.6); }
   #immuneTag { position: absolute; right: -68px; top: -4px; font-size: 11px; letter-spacing: 2px; color: #cdd7ff; opacity: .9; }
   #phaseLine { margin-top: 8px; font-size: 14px; letter-spacing: 3px; text-transform: uppercase; opacity: .95; }
   #phaseLine.danger { color: var(--rose); }
@@ -262,7 +266,7 @@
 
   <div id="bossbar" class="hidden">
     <div id="bossname"></div>
-    <div id="bossbarOuter"><div id="bossbarFill"></div><div id="bossbarMark"></div><div id="immuneTag" class="hidden">IMMUNE</div></div>
+    <div id="bossbarOuter"><div id="bossbarFill"></div><div id="bossShieldPanel" class="hidden"></div><div id="bossbarMark"></div><div id="immuneTag" class="hidden">IMMUNE</div></div>
     <div id="phaseLine"></div>
   </div>
 

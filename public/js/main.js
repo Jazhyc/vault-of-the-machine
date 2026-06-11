@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { CLASSES, ARENA, PLAYER, ENC, SUPER, WEAPONS, LOADOUT, MAX_PLAYERS } from '/shared/constants.js';
+import { CLASSES, ARENA, PLAYER, ENC, ENEMIES, SUPER, WEAPONS, LOADOUT, MAX_PLAYERS } from '/shared/constants.js';
 import { Net } from './net.js';
 import { GameAudio } from './audio.js';
 import { buildWorld } from './world.js';
@@ -105,6 +105,24 @@ const glowPool = Array.from({ length: MAX_PLAYERS }, () => {
   return l;
 });
 
+// Remote-projectile orbs (rockets/grenades/novas relayed via `pf`) churn
+// constantly in a full fireteam — shared geometry + per-color cached materials,
+// never allocated per spawn (perf playbook), and warmed in the boot frame below.
+const RPROJ_GEO = new THREE.SphereGeometry(0.18, 8, 8);
+const RPROJ_GEO_BIG = new THREE.SphereGeometry(0.55, 8, 8); // nova singularity
+const rprojMats = new Map();
+const rprojMat = (color) => {
+  if (!rprojMats.has(color)) rprojMats.set(color, new THREE.MeshBasicMaterial({ color }));
+  return rprojMats.get(color);
+};
+function spawnRemoteProj(from, dir, speed, color, { big = false, grav = false } = {}) {
+  const mesh = new THREE.Mesh(big ? RPROJ_GEO_BIG : RPROJ_GEO, rprojMat(color));
+  mesh.raycast = () => {};
+  mesh.position.copy(from);
+  scene.add(mesh);
+  remoteProjs.push({ mesh, vel: dir.multiplyScalar(speed), ttl: 2.5, grav });
+}
+
 // Pre-warm the GPU: actually DRAW one of everything once — enemies, pickups,
 // projectiles, a guardian, the boss and its beams — so first-use buffer uploads
 // and shader compiles never land mid-fight. Frustum culling must be off (a
@@ -112,7 +130,8 @@ const glowPool = Array.from({ length: MAX_PLAYERS }, () => {
 {
   const warm = new THREE.Group();
   warm.add(buildEnemyWarmup(), buildEntityWarmup(), buildWeaponFxWarmup(),
-    buildGuardian('WARMUP', 'gunslinger').g);
+    buildGuardian('WARMUP', 'gunslinger').g,
+    new THREE.Mesh(RPROJ_GEO, rprojMat(0xffaa33)), new THREE.Mesh(RPROJ_GEO_BIG, rprojMat(0x9d4edd)));
   warm.traverse(o => { o.raycast = () => {}; o.frustumCulled = false; });
   warm.position.set(0, 8, -10);
   scene.add(warm);
@@ -345,7 +364,7 @@ net.on('snap', (m) => {
       hud.toast('The Vault seals!', 'warn');
     }
     if (st === 'OBLIT') { hud.announce('OBLITERATION INCOMING', 'KINDLED LIGHT ENDURES'); audio.riser(); }
-    if (st === 'FINAL') { hud.announce('FINAL STAND', 'REALITY FRAYS'); audio.roar(); }
+    if (st === 'FINAL') { hud.announce('FINAL STAND', 'ITS LAST GENERATOR SCREAMS'); audio.roar(); }
     if (st === 'DAMAGE') hud.announce('DAMAGE PHASE', 'UNLOAD EVERYTHING');
     if (st === 'LOBBY' && prevSt !== 'LOBBY') hud.endScreen(null);
     audio.intensity(st === 'DAMAGE' || st === 'FINAL' ? 1 : st === 'LOBBY' ? 0 : 0.35);
@@ -374,12 +393,7 @@ net.on('pf', (m) => {
     const speed = m.w === 'rocket' ? 55 : m.w === 'gjally' ? WEAPONS.gjally.projSpeed : m.w === 'nova' ? SUPER.nova.speed : 22;
     const color = m.w === 'rocket' ? 0xffaa33 : m.w === 'gjally' ? 0x7dffb0 : m.w === 'nova' ? 0x9d4edd
       : (clsColorOf(m.id) ?? 0x7ae582);
-    const mesh = new THREE.Mesh(new THREE.SphereGeometry(m.w === 'nova' ? 0.55 : 0.18, 8, 8),
-      new THREE.MeshBasicMaterial({ color }));
-    mesh.raycast = () => {};
-    mesh.position.copy(from);
-    scene.add(mesh);
-    remoteProjs.push({ mesh, vel: dir.multiplyScalar(speed), ttl: 2.5, grav: m.w === 'grenade' });
+    spawnRemoteProj(from, dir, speed, color, { big: m.w === 'nova', grav: m.w === 'grenade' });
     audio.shot(m.w === 'grenade' ? 'melee' : m.w === 'gjally' ? 'gjally' : 'rocket');
   }
 });
@@ -419,11 +433,7 @@ net.on('super', (m) => {
       const caster = snap.players.find(p => p.id === m.id);
       if (caster) {
         const from = new THREE.Vector3(caster.p[0], caster.p[1] + 1.5, caster.p[2]);
-        const mesh = new THREE.Mesh(new THREE.SphereGeometry(0.55, 10, 8), new THREE.MeshBasicMaterial({ color: 0x9d4edd }));
-        mesh.raycast = () => {};
-        mesh.position.copy(from);
-        scene.add(mesh);
-        remoteProjs.push({ mesh, vel: new THREE.Vector3(...m.dir).multiplyScalar(SUPER.nova.speed), ttl: 2.5 });
+        spawnRemoteProj(from, new THREE.Vector3(...m.dir), SUPER.nova.speed, 0x9d4edd, { big: true });
       }
     }
   }
@@ -439,7 +449,9 @@ net.on('hurt', (m) => {
   }
   audio.hurt(m.dmg, m.src, pan);
   effects.shake(Math.min(0.6, m.dmg / 80));
-  if (m.imp && player) player.impulse(m.imp);
+  // slam/seeker shoves are client-computed in their FX handlers (off our live
+  // position); their imp is direction-for-the-pan only, never applied twice
+  if (m.imp && player && m.src !== 'slam' && m.src !== 'seeker') player.impulse(m.imp);
 });
 net.on('ammo', (m) => { if (weapons) weapons.addAmmo(m.kind); });
 // rally banner: ammo/cooldowns restock client-side (they live in WeaponSystem);
@@ -453,7 +465,11 @@ net.on('restock', () => {
 });
 net.on('down', () => audio.down());
 net.on('revived', () => audio.revive());
-net.on('shieldBreak', () => { audio.roar(); effects.shake(0.5); });
+net.on('shieldBreak', () => {
+  audio.roar(); effects.shake(0.5);
+  // mid-FINAL this is the generator surge ending, not a missile shield break
+  if (snap && snap.enc.st === 'FINAL') hud.announce('THE GENERATOR DIES', 'UNLOAD EVERYTHING');
+});
 net.on('oblit', () => {
   // arena-wide white flash; muted if you made it into a well
   let safe = false;
@@ -464,7 +480,18 @@ net.on('oblit', () => {
   effects.shake(safe ? 0.4 : 1.0);
   audio.explosion(true);
 });
-net.on('bossSlam', () => { effects.shake(0.7); audio.slam(); });
+net.on('bossSlam', () => {
+  effects.shake(0.7); audio.slam();
+  // shove ourselves off our live position, in sync with the slam FX — the
+  // server's hurt only carries the damage (see the hurt handler)
+  if (player && player.alive) {
+    const d = Math.hypot(player.pos.x - ENC.bossPos[0], player.pos.z - ENC.bossPos[2]);
+    if (d < ENC.slamRange + 2) {
+      const dir = d > 0.1 ? [(player.pos.x - ENC.bossPos[0]) / d, (player.pos.z - ENC.bossPos[2]) / d] : [1, 0];
+      player.impulse([dir[0] * ENC.slamKb[0], ENC.slamKb[1], dir[1] * ENC.slamKb[0]]);
+    }
+  }
+});
 net.on('bossVolley', () => audio.volley());
 net.on('sweep', () => {
   hud.announce('ARENA PARTITION', 'THE BEAMS HUNT LOW');
@@ -546,6 +573,16 @@ net.on('seekers', (m) => audio.seekerLaunch(m.n, volAt(ENC.bossPos)));
 net.on('seekerBoom', (m) => {
   effects.explosion(new THREE.Vector3(m.p[0], m.p[1], m.p[2]), 'seeker');
   audio.explosion(false, volAt(m.p));
+  // client-computed shove, mirroring detonateSeeker's chest-height blast check
+  if (player && player.alive) {
+    const def = ENEMIES.seeker;
+    const c = [player.pos.x, player.pos.y + 1.0, player.pos.z];
+    const d = Math.hypot(c[0] - m.p[0], c[1] - m.p[1], c[2] - m.p[2]);
+    if (d < def.blastR) {
+      const dir = d > 0.1 ? [(c[0] - m.p[0]) / d, (c[2] - m.p[2]) / d] : [0, 1];
+      player.impulse([dir[0] * def.kb[0], def.kb[1], dir[1] * def.kb[0]]);
+    }
+  }
 });
 net.on('bossDied', (m) => {
   audio.victory();

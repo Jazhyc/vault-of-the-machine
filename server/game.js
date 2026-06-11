@@ -47,6 +47,8 @@ export class Game {
       grabAngle: 0,               // panel's resting offset around the sky-ring (rad, 0 = north)
       wormhole: false, missileAt: 0,
       nextVolleyAt: 0, nextSlamAt: 0, final: false,
+      surgeUntil: 0,              // final-stand generator surge: shield holds until then
+      surgeWavesLeft: 0, surgeWaveAt: 0, // remainder of a surge seeker burst (waves ripple surgeWaveGap apart)
       // back-launched homing missiles: salvo = seekerBase + seekerBonus,
       // and the bonus grows by one on every phase entry after the first
       nextSeekerAt: 0, seekerBonus: 0, seekerSeen: false,
@@ -327,8 +329,7 @@ export class Game {
   startWipe() {
     for (const p of this.players.values()) { p.downed = false; p.dead = true; }
     this.enc.st = 'WIPE'; this.enc.ends = this.t + ENC.wipeDelay;
-    this.enc.sweep = null; this.enc.barrageUntil = 0;
-    this.enc.wormhole = false; this.enc.stage = null;
+    this.clearPhaseFx();
     this.endViralPhase();
     this.send(null, { t: 'wipe', stats: this.encStats() });
     this.toast('Darkness consumes all...', 'boss');
@@ -348,18 +349,27 @@ export class Game {
     this.enterMech(1);
   }
 
+  // Every phase entry routes through this: a sweep, barrage, or MECH stage
+  // that survives a transition leaks boss specials across phases (this bug
+  // shipped before). enterDamage alone keeps the wormhole — it hangs open
+  // overhead for the whole phase, sealing only at the next entry.
+  clearPhaseFx(keepWormhole = false) {
+    const e = this.enc;
+    e.sweep = null; e.barrageUntil = 0;
+    e.stage = null; e.strikes = []; e.surgeUntil = 0; e.surgeWavesLeft = 0;
+    if (!keepWormhole) { e.wormhole = false; e.missileAt = 0; }
+  }
+
   enterMech(round) {
     const e = this.enc;
     e.st = 'MECH'; e.round = round; e.ends = 0;
+    this.clearPhaseFx();
     this.endViralPhase(); // unspent keys are forfeit once the round turns over
-    e.stage = null; e.keeperIds = []; e.finalKeeperId = null;
-    e.strikes = [];
-    e.wormhole = false; e.missileAt = 0;
+    e.keeperIds = []; e.finalKeeperId = null;
     e.sigil = { ...rollSigil(), grid: 0, matched: [false, false] };
     e.nextWaveAt = this.t + 3;
     e.nextKeeperAt = this.t + ENC.firstKeeperDelay;
     e.nextVolleyAt = this.t + 5; e.nextSlamAt = this.t + 3;
-    e.sweep = null; e.barrageUntil = 0;
     e.nextSpecialAt = this.t + ENC.specialFirstDelay;
     e.nextSeekerAt = this.t + ENC.seekerFirst;
     if (round > 1) e.seekerBonus++;
@@ -524,8 +534,7 @@ export class Game {
   enterDamage() {
     const e = this.enc;
     e.st = 'DAMAGE'; e.ends = this.t + ENC.damageDur; e.shield = false;
-    e.stage = null; // the wormhole stays open overhead for the whole phase
-    e.sweep = null; e.barrageUntil = 0;
+    this.clearPhaseFx(true); // the wormhole stays open overhead for the whole phase
     this.clearAdds();
     this.send(null, { t: 'shieldBreak' });
     e.nextVolleyAt = this.t + 2.5;
@@ -573,8 +582,7 @@ export class Game {
   enterOblit() {
     const e = this.enc;
     e.st = 'OBLIT'; e.ends = this.t + ENC.oblitWarn; e.shield = true;
-    e.sweep = null; e.barrageUntil = 0;
-    e.wormhole = false; // the tear seals as the Watcher draws everything inward
+    this.clearPhaseFx(); // the tear seals as the Watcher draws everything inward
     this.endViralPhase(false); // blisters & capsules wither; keys stay usable
     // Refuge no longer comes for free: only a key-woken well shelters the team.
     const woken = [...this.wells.values()].some(w => w.kind === 'refuge');
@@ -603,21 +611,33 @@ export class Game {
 
   enterFinal() {
     const e = this.enc;
-    e.st = 'FINAL'; e.final = true; e.shield = false; e.ends = this.t + ENC.annihilation;
-    e.wormhole = false; e.stage = null;
+    e.st = 'FINAL'; e.final = true;
+    this.clearPhaseFx();
     this.endViralPhase();
     this.clearAdds();
-    e.nextVolleyAt = this.t + 2;
-    e.sweep = null; e.barrageUntil = 0;
-    e.nextSpecialAt = this.t + 6; // chained, overlapping specials during the final stand
-    e.nextSeekerAt = this.t + ENC.seekerFirst; e.seekerBonus++;
+    // generator surge: the shield reignites and seeker waves pour out under a
+    // sweep that holds the whole surge; volleys/specials wait for the true
+    // final stand (their timers sit past surgeUntil), and the annihilation
+    // clock only starts once the generator gives out (tickBoss drops the shield)
+    e.shield = true;
+    e.surgeUntil = this.t + ENC.surgeDur;
+    e.ends = e.surgeUntil + ENC.annihilation;
+    const haste = this.specialHaste();
+    const a = Math.random() * Math.PI * 2;
+    e.sweep = {
+      a1: a, a2: a + Math.PI / 2, w1: ENC.sweepW1 * haste, w2: ENC.sweepW2 * haste,
+      armAt: this.t + ENC.sweepWarn / haste, until: e.surgeUntil,
+    };
+    this.send(null, { t: 'sweep' });
+    e.nextSeekerAt = this.t + ENC.surgeFirst; e.seekerBonus++;
+    e.nextVolleyAt = e.surgeUntil + 2;
+    e.nextSpecialAt = e.surgeUntil + 6; // chained, overlapping specials during the final stand
   }
 
   victory(p) {
     const e = this.enc;
     e.bossDead = true; e.st = 'VICTORY'; e.ends = this.t + ENC.victoryDelay;
-    e.sweep = null; e.barrageUntil = 0;
-    e.wormhole = false; e.stage = null;
+    this.clearPhaseFx();
     this.endViralPhase();
     this.enemies.clear(); this.projs.clear();
     this.chest = { p: [0, 0, 10] };
@@ -757,6 +777,17 @@ export class Game {
     return aim;
   }
 
+  // Lead the target (leadAim) and loose an enemy projectile from `from`.
+  fireProjAt(from, target, def, k, r) {
+    const aim = this.leadAim(from, target, def.projSpeed);
+    const d = d3(from, aim) || 1;
+    this.projs.set(nid(), {
+      k, p: [...from],
+      v: [(aim[0] - from[0]) / d * def.projSpeed, (aim[1] - from[1]) / d * def.projSpeed, (aim[2] - from[2]) / d * def.projSpeed],
+      dmg: def.dmg, r, until: this.t + 6,
+    });
+  }
+
   moveEnemy(e, dir, speed, dt) {
     e.pos[0] += dir[0] * speed * dt;
     e.pos[2] += dir[2] * speed * dt;
@@ -796,14 +827,7 @@ export class Game {
         e.yaw = ang + Math.PI / 2;
         if (this.t >= e.nextAtkAt && dist < 38) {
           e.nextAtkAt = this.t + def.fireCd + rand(-0.4, 0.4);
-          const from = [...e.pos];
-          const aim = this.leadAim(from, target, def.projSpeed);
-          const d = d3(from, aim) || 1;
-          this.projs.set(nid(), {
-            k: 'bolt', p: from,
-            v: [(aim[0] - from[0]) / d * def.projSpeed, (aim[1] - from[1]) / d * def.projSpeed, (aim[2] - from[2]) / d * def.projSpeed],
-            dmg: def.dmg, r: 0.4, until: this.t + 6,
-          });
+          this.fireProjAt(e.pos, target, def, 'bolt', 0.4);
         }
         continue;
       }
@@ -815,7 +839,7 @@ export class Game {
         if (dist > def.atkRange * 0.8) this.moveEnemy(e, to, def.speed, dt);
         if (dist < def.atkRange && this.t >= e.nextAtkAt) {
           e.nextAtkAt = this.t + def.atkCd;
-          this.dmgPlayer(target, def.dmg, 'husk', [to[0] * 5, 3, to[2] * 5]);
+          this.dmgPlayer(target, def.dmg, 'husk', [to[0] * def.kb[0], def.kb[1], to[2] * def.kb[0]]);
         }
       } else {
         // ranged: acolyte / keeper (the sky herald hovers in place above the boss)
@@ -830,13 +854,8 @@ export class Game {
         if (this.t >= e.nextAtkAt && dist < 40) {
           e.nextAtkAt = this.t + def.fireCd + rand(-0.3, 0.3);
           const from = [e.pos[0], e.sky ? e.pos[1] : 1.6, e.pos[2]];
-          const aim = this.leadAim(from, target, def.projSpeed);
-          const d = d3(from, aim) || 1;
-          const v = [(aim[0] - from[0]) / d * def.projSpeed, (aim[1] - from[1]) / d * def.projSpeed, (aim[2] - from[2]) / d * def.projSpeed];
-          this.projs.set(nid(), {
-            k: e.type === 'keeper' ? 'heavy' : 'bolt', p: from, v,
-            dmg: def.dmg, r: e.type === 'keeper' ? 0.7 : 0.45, until: this.t + 6,
-          });
+          this.fireProjAt(from, target, def,
+            e.type === 'keeper' ? 'heavy' : 'bolt', e.type === 'keeper' ? 0.7 : 0.45);
         }
       }
     }
@@ -894,7 +913,10 @@ export class Game {
     const e = this.enc;
     const targets = this.alivePlayers();
     if (!targets.length) return;
-    const n = ENC.seekerBase + e.seekerBonus;
+    // during the generator surge every guardian is hunted: targets deal out
+    // round-robin and the wave never runs short of the fireteam
+    const surging = e.surgeUntil > this.t;
+    const n = Math.max(ENC.seekerBase + e.seekerBonus, surging ? targets.length : 0);
     // during damage the whole salvo hunts the marked player, like the volleys
     const focus = e.st === 'DAMAGE' ? targets.find(p => p.id === e.focus) : null;
     for (let i = 0; i < n; i++) {
@@ -905,7 +927,7 @@ export class Game {
         ENC.bossPos[1] + 2.5,
         ENC.bossPos[2] + out[2] * (ENC.bossBodyR - 0.8),
       ]);
-      s.target = (focus || pick(targets)).id;
+      s.target = (focus || (surging ? targets[i % targets.length] : pick(targets))).id;
       s.popUntil = this.t + ENC.seekerPop;      // climb clear of the hull first
       s.launchV = [out[0] * 5, 7, out[2] * 5];
       s.dieAt = this.t + ENC.seekerLife;        // endless kiting still ends
@@ -966,7 +988,7 @@ export class Game {
       const d = d3(e.pos, c);
       if (d > def.blastR) continue;
       const dir = d > 0.1 ? [(c[0] - e.pos[0]) / d, 0, (c[2] - e.pos[2]) / d] : [0, 0, 1];
-      this.dmgPlayer(p, def.dmg * (1 - 0.4 * d / def.blastR), 'seeker', [dir[0] * 7, 4, dir[2] * 7]);
+      this.dmgPlayer(p, def.dmg * (1 - 0.4 * d / def.blastR), 'seeker', [dir[0] * def.kb[0], def.kb[1], dir[2] * def.kb[0]]);
     }
   }
 
@@ -1025,10 +1047,27 @@ export class Game {
       en.yaw = a;
     }
 
+    // the emergency generator gives out: the surge shield drops and the true
+    // final stand begins (clients get the same roar/shake as a shield break)
+    if (e.surgeUntil && this.t >= e.surgeUntil) {
+      e.surgeUntil = 0; e.shield = false; e.surgeWavesLeft = 0; // a half-fired burst dies with the generator
+      this.send(null, { t: 'shieldBreak' });
+    }
+
     // back-launched homing seekers: a basic attack on its own clock,
-    // independent of the special chain (active from round 1)
+    // independent of the special chain (active from round 1); the generator
+    // surge launches burst after burst instead, each floor(alive/2) waves
     if (this.t >= e.nextSeekerAt) {
-      e.nextSeekerAt = this.t + ENC.seekerCd;
+      const surging = e.surgeUntil > this.t;
+      e.nextSeekerAt = this.t + (surging ? ENC.surgeWaveCd : ENC.seekerCd);
+      if (surging) {
+        e.surgeWavesLeft = Math.max(1, Math.floor(this.alivePlayers().length / 2)) - 1;
+        e.surgeWaveAt = this.t + ENC.surgeWaveGap;
+      }
+      this.launchSeekers();
+    }
+    if (e.surgeWavesLeft > 0 && this.t >= e.surgeWaveAt) {
+      e.surgeWavesLeft--; e.surgeWaveAt = this.t + ENC.surgeWaveGap;
       this.launchSeekers();
     }
 
@@ -1102,7 +1141,7 @@ export class Game {
           const d = dxz(p.pos, ENC.bossPos);
           if (d < ENC.slamRange + 2) {
             const dir = d > 0.1 ? [p.pos[0] / d, 0, p.pos[2] / d] : [1, 0, 0];
-            this.dmgPlayer(p, ENC.slamDmg, 'slam', [dir[0] * 14, 9, dir[2] * 14]);
+            this.dmgPlayer(p, ENC.slamDmg, 'slam', [dir[0] * ENC.slamKb[0], ENC.slamKb[1], dir[2] * ENC.slamKb[0]]);
           }
         }
       } else e.nextSlamAt = this.t + 1;
@@ -1408,6 +1447,7 @@ export class Game {
         st: e.st, round: e.round, stage: e.stage,
         ends: e.ends, ready: e.ready, readyNeed: ENC.readyTime,
         bossHp: Math.round(e.bossHp), bossMax: e.bossMax, shield: e.shield, bossDead: e.bossDead,
+        sg: e.surgeUntil, // generator-surge end: the HUD shield panel drains toward it
         burned: e.burned, focus: e.focus, bossYaw: Math.round(e.bossYaw * 100) / 100,
         wh: e.wormhole, mAt: e.missileAt,
         // sigil layout: twin/final colors, per-pillar owner + segment, lattice

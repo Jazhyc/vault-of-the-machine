@@ -17,6 +17,10 @@ export const ARENA = {
 export const PLAYER = {
   maxHp: 200, walk: 8, sprint: 12.5, airControl: 0.35,
   jumpVel: 9.5, gravity: 25, radius: 0.8, eye: 1.7,
+  // ceiling on summed knockback per client frame: TCP clumping at high ping
+  // can deliver several shoves in one frame; 18 lets the strongest single
+  // shove (slam, |[14,9]| ≈ 16.6) through untouched and trims only pile-ups
+  kbFrameCap: 18,
   regenDelay: 5, regenRate: 60,
   reviveTime: 3.0, reviveRange: 4.5, bleedout: 45,
   interactRange: 2.6,
@@ -106,7 +110,10 @@ export const CLASS_SUPER = { voidcaller: 'nova', gunslinger: 'golden', sentinel:
 export const DMG_CAPS = { auto: 25, sniper: 230, melee: 90, hand: 80, shotgun: 225, lmg: 52, gjally: 135, gswarm: 60 };
 
 export const ENEMIES = {
-  husk:    { name: 'Riven Husk',   hp: 120, speed: 5.5, dmg: 22, atkRange: 2.4, atkCd: 1.5 },
+  // kb: knockback shove as [horizontal, vertical] m/s. The client computes
+  // slam/seeker shoves itself off the FX broadcast (its own live position —
+  // the server's view is an RTT stale); husk rides the hurt's imp.
+  husk:    { name: 'Riven Husk',   hp: 120, speed: 5.5, dmg: 22, atkRange: 2.4, atkCd: 1.5, kb: [5, 3] },
   acolyte: { name: 'Void Acolyte', hp: 160, speed: 4.6, dmg: 14, fireCd: 3.4, projSpeed: 15, rangeMin: 13, rangeMax: 24 },
   keeper:  { name: 'Vault Keeper', hp: 950, speed: 2.8, dmg: 28, fireCd: 3.6, projSpeed: 13 },
   wisp:    { name: 'Warding Wisp', hp: 80, dmg: 10, fireCd: 4.5, projSpeed: 14, orbitR: 2.9, orbitSpeed: 1.6 },
@@ -119,7 +126,7 @@ export const ENEMIES = {
   // a healthy missile, so the salvo ripples, one pop per chainFuse) — but the
   // chain pops are duds to players, and detonations on players/terrain never
   // chain, or converging missiles would defuse each other on first impact.
-  seeker:  { name: 'Riven Seeker', hp: 90, speed: 8.5, dmg: 38, blastR: 3,
+  seeker:  { name: 'Riven Seeker', hp: 90, speed: 8.5, dmg: 38, blastR: 3, kb: [7, 4],
              chainR: 4, chainDmg: 110, chainFuse: 0.15 },
 };
 
@@ -130,6 +137,16 @@ export const ENC = {
   keeperPerPlayer: 320,
   damageDur: 25, oblitWarn: 4.5, oblitDmg: 9999, // unsheltered = erased
   finalFrac: 0.25, annihilation: 32,
+  // final-stand surge: at the threshold the emergency generator reignites the
+  // shield — the boss is immune for surgeDur while seeker bursts launch every
+  // surgeWaveCd (round-robin, so every guardian is hunted) under one sweep that
+  // holds the whole surge: jump the beams between bursts of rocket fire. Each
+  // burst is floor(alive/2) waves (min 1) rippling surgeWaveGap apart — the gap
+  // keeps every fan a distinct, shootable salvo instead of one wrapped-around
+  // wall, and the scaling means a duo feels one wave while a full fireteam
+  // weathers three. The annihilation clock starts only once the generator
+  // gives out.
+  surgeDur: 30, surgeWaveCd: 2, surgeFirst: 1.5, surgeWaveGap: 0.45,
   waveCd: 18, addCapBase: 8, addCapPer: 4, firstKeeperDelay: 6,
   readyTime: 3, readyRadius: 4,
   // rally banner: planted on the white circle near spawn during LOBBY only;
@@ -178,7 +195,7 @@ export const ENC = {
   // Cadence tightens when the boss is exposed — standing on the crit core has
   // to cost constant attention, especially in round 1 when no specials exist.
   volleyCdMech: 5, volleyCdDmg: 3, volleyCdFinal: 2, volleyDmg: 30, volleySpeed: 22, volleySpread: 0.2,
-  slamRange: 9.5, slamCd: 6, slamDmg: 45,
+  slamRange: 9.5, slamCd: 6, slamDmg: 45, slamKb: [14, 9], // kb: see ENEMIES
   // seekers: homing missiles off the boss's back, active from round 1.
   // Perfect tracking is the threat; the counters are shooting them down (a
   // couple of body shots), feeding them a pillar/wall, or sprinting away —

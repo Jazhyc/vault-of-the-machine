@@ -315,6 +315,25 @@ const slay = (g, id) => { while (g.enemies.has(id)) g.onMessage('p1', { t: 'hit'
   assert.equal(ENC.finalFrac, 0.25, 'final stand opens at 25%');
   ok('final stand triggers at 25%');
 
+  // generator surge: the shield reignites, a sweep holds for the whole surge,
+  // and seeker waves pour out every surgeWaveCd
+  assert.ok(g.enc.shield, 'the emergency generator reignites the shield');
+  assert.ok(g.enc.sweep && g.enc.sweep.until === g.enc.surgeUntil, 'one sweep spins for the whole surge');
+  const hpAtSurge = g.enc.bossHp;
+  g.onMessage('p1', { t: 'hit', target: 'boss', dmg: 200, weapon: 'sniper' });
+  assert.equal(g.enc.bossHp, hpAtSurge, 'the surged boss is immune');
+  const wavesBefore = msgs.filter(x => x.m.t === 'seekers').length;
+  advance(g, ENC.surgeDur + 0.5);
+  const waves = msgs.filter(x => x.m.t === 'seekers').length - wavesBefore;
+  assert.ok(waves >= Math.floor((ENC.surgeDur - ENC.surgeFirst) / ENC.surgeWaveCd),
+    `the surge launches wave after wave (got ${waves})`);
+  assert.ok(msgs.some(x => x.m.t === 'snap' && x.m.enc.sg > 0), 'snapshots carry the surge deadline for the HUD drain');
+  assert.ok(!g.enc.shield, 'the generator dies — the boss is exposed again');
+  assert.equal(g.enc.surgeUntil, 0);
+  assert.equal(g.enc.sweep, null, 'the surge sweep dies with it');
+  assert.ok(g.enc.ends > g.t + ENC.annihilation - 1, 'annihilation only counts from the surge breaking');
+  ok('generator surge: immune boss, permanent sweep, rolling seeker waves');
+
   // kill it before annihilation
   while (g.enc.bossHp > 0) g.onMessage('p1', { t: 'hit', target: 'boss', dmg: 200, weapon: 'sniper' });
   assert.equal(g.enc.st, 'VICTORY');
@@ -441,7 +460,7 @@ const slay = (g, id) => { while (g.enemies.has(id)) g.onMessage('p1', { t: 'hit'
   assert.equal(g.enc.st, 'FINAL');
   moveTo(g, 'p1', [0, 0, 30]);
   god(g); // survive the volleys so the annihilation timer itself wipes us
-  advance(g, ENC.annihilation + 0.5);
+  advance(g, ENC.surgeDur + ENC.annihilation + 0.5);
   assert.equal(g.enc.st, 'WIPE', 'annihilation cast completing wipes the team');
   advance(g, ENC.wipeDelay + 0.5);
   assert.equal(g.enc.st, 'LOBBY');
@@ -801,18 +820,44 @@ const slay = (g, id) => { while (g.enemies.has(id)) g.onMessage('p1', { t: 'hit'
     assert.ok(pr.p[1] > ENC.barrageY - ENC.barrageBobAmp - 0.2 &&
       pr.p[1] < ENC.barrageY + ENC.barrageBobAmp + 0.2, 'ring rides the chest-high bob band');
   }
-  // spiral: the heading curls over time instead of flying straight
-  const [sampleId, sample] = hell[0];
-  const h0 = Math.atan2(sample.v[2], sample.v[0]);
+  // spiral: the heading curls over time instead of flying straight (any one
+  // ring can randomly eat a pillar or the player's hull mid-flight, so sample
+  // them all and compare whichever survives)
+  const h0s = new Map(hell.map(([id, pr]) => [id, Math.atan2(pr.v[2], pr.v[0])]));
   advance(g, 1.0);
-  const later = g.projs.get(sampleId);
-  assert.ok(later, 'sampled ring still alive');
-  let dh = Math.atan2(later.v[2], later.v[0]) - h0;
+  const survivor = [...h0s.keys()].find((id) => g.projs.get(id));
+  assert.ok(survivor, 'a sampled ring still alive');
+  const later = g.projs.get(survivor);
+  let dh = Math.atan2(later.v[2], later.v[0]) - h0s.get(survivor);
   while (dh > Math.PI) dh -= 2 * Math.PI;
   while (dh < -Math.PI) dh += 2 * Math.PI;
   assert.ok(Math.abs(dh) > 0.4, 'ring heading curls into a spiral');
   assert.equal(Math.sign(dh), g.enc.barrageDir, 'curl follows the barrage spin direction');
   ok('rhythmic barrage fires spiraling, bobbing, unjumpable rings');
+}
+
+// ---------- phase entries clear running specials (no cross-phase leaks) ----------
+{
+  const g = mkGame();
+  g.addPlayer('p1', 'Hygiene', 'gunslinger');
+  moveTo(g, 'p1', [0, 0, 1]);
+  advance(g, ENC.readyTime + 0.5);
+  god(g);
+  // victory/startWipe are terminal — keep them last so earlier entries see a live raid
+  for (const enter of ['enterDamage', 'enterOblit', 'enterFinal', 'victory', 'startWipe']) {
+    g.enc.st = 'MECH';
+    g.startSweep();
+    g.startBarrage();
+    g.enc.wormhole = true;
+    g[enter]();
+    // enterFinal swaps the running sweep for its own surge-long one
+    if (enter === 'enterFinal') assert.equal(g.enc.sweep.until, g.enc.surgeUntil, 'enterFinal restarts the sweep for the surge');
+    else assert.equal(g.enc.sweep, null, `${enter} kills a running sweep`);
+    assert.ok(g.enc.barrageUntil <= g.t, `${enter} kills a running barrage`);
+    if (enter === 'enterDamage') assert.ok(g.enc.wormhole, 'the wormhole stays open into the damage phase');
+    else assert.ok(!g.enc.wormhole, `${enter} seals the wormhole`);
+  }
+  ok('every phase entry clears running specials (no cross-phase leaks)');
 }
 
 // ---------- gjallarhorn: per-player unlock, loot, 30s victory reset, caps ----------
@@ -923,7 +968,14 @@ const slay = (g, id) => { while (g.enemies.has(id)) g.onMessage('p1', { t: 'hit'
   advance(g, 11.5);
   assert.equal(seekers().length, 0, 'the survivor spent itself');
   assert.ok(msgs.some(x => x.m.t === 'seekerBoom'), 'detonation broadcast for the boom FX');
-  assert.ok(msgs.some(x => x.m.t === 'hurt' && x.to === 'p1' && x.m.src === 'seeker'), 'the blast wounds the hunted');
+  const blastHurt = msgs.find(x => x.m.t === 'hurt' && x.to === 'p1' && x.m.src === 'seeker');
+  assert.ok(blastHurt, 'the blast wounds the hunted');
+  // the client recomputes this shove locally off seekerBoom (kb in shared
+  // constants); the hurt's imp must keep matching it — it still drives the pan
+  // (horizontal part ≤ kb[0]: the direction is normalized by the 3D distance)
+  const impH = Math.hypot(blastHurt.m.imp[0], blastHurt.m.imp[2]);
+  assert.ok(impH > 0 && impH <= ENEMIES.seeker.kb[0] + 1e-9
+    && blastHurt.m.imp[1] === ENEMIES.seeker.kb[1], 'the blast shove comes from the shared kb tuning');
 
   // terrain blocks them: one conjured inside a pillar detonates immediately
   msgs.length = 0;
@@ -983,6 +1035,38 @@ const slay = (g, id) => { while (g.enemies.has(id)) g.onMessage('p1', { t: 'hit'
   for (let i = 0; i < 6; i++) { g.clearAdds(); g.launchSeekers(); for (const s of seekers()) picked.add(s.target); }
   assert.ok(picked.size > 1, 'mech: the salvo spreads across the fireteam again');
   ok('seekers: damage-phase salvo converges on the mark, spreads otherwise');
+}
+
+// ---------- generator-surge seeker bursts scale with the fireteam ----------
+{
+  const g = mkGame();
+  g.addPlayer('p1', 'A', 'gunslinger');
+  g.addPlayer('p2', 'B', 'voidcaller');
+  g.addPlayer('p3', 'C', 'sentinel');
+  g.addPlayer('p4', 'D', 'gunslinger');
+  for (let i = 1; i <= 4; i++) moveTo(g, 'p' + i, [i * 0.5, 0, 1]);
+  advance(g, ENC.readyTime + 0.5);
+  god(g);
+
+  // four alive → each burst is two waves, the second rippling surgeWaveGap later
+  g.enterFinal();
+  msgs = [];
+  advance(g, ENC.surgeFirst + ENC.surgeWaveGap * 2); // first burst fully rippled, well before the next at surgeWaveCd
+  const burst = msgs.filter(x => x.m.t === 'seekers');
+  assert.equal(burst.length, 2, 'four guardians: two waves per burst');
+
+  // two left standing → the burst shrinks back to a single wave
+  g.players.get('p3').dead = true;
+  g.players.get('p4').dead = true;
+  msgs = [];
+  advance(g, ENC.surgeWaveCd); // spans exactly one burst window
+  assert.equal(msgs.filter(x => x.m.t === 'seekers').length, 1, 'two guardians: one wave per burst');
+
+  // a half-fired burst must not leak across phase entries
+  g.enc.surgeWavesLeft = 3;
+  g.enterDamage();
+  assert.equal(g.enc.surgeWavesLeft, 0, 'phase entry kills the rest of a surge burst');
+  ok('generator-surge seeker bursts: floor(alive/2) waves, no cross-phase leak');
 }
 
 // ---------- end-of-encounter scoreboard ----------

@@ -99,8 +99,9 @@ sprint, and a double jump.
    dead onto the floor — so the three Locks double as the raid's clock. Then it all repeats,
    harder:
    - **Round 2+** — Vault Keepers arrive warded by orbiting **Wisps** that soak your shots,
-     and Vaulthur opens up with a **rhythmic barrage**: rotating rings of slow bullets to
-     weave through.
+     and Vaulthur opens up with a **rhythmic barrage**: spiral arms of caged embers that
+     snake chest-high and bob to the beat — too high to duck, too low to jump; weave the
+     gaps sideways.
    - **Round 3+** — Vaulthur periodically **partitions the arena**: two converging laser
      beams sweep at shin height (jump them!). Enemies stop spawning while the beams spin.
 5. **Final Stand** — at **25% HP** (marked by the notch on the boss bar) the shield stays

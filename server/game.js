@@ -27,6 +27,7 @@ export class Game {
   resetWorld() {
     this.enemies = new Map();
     this.projs = new Map();
+    this.dots = new Map();        // voidcaller grenade orbs: lingering DoT zones
     this.bricks = new Map();
     this.wells = new Map();
     this.caps = new Map();        // antiviral capsules raining during damage phase
@@ -42,6 +43,8 @@ export class Game {
       // → MISSILE (wormhole open, impact pending)
       stage: null, sigil: null, keeperIds: [], finalKeeperId: null,
       strikes: [],                // pending lattice strikes: { keeperId, at }
+      nextGrabAt: 0, grabSeen: false, // boss panel-grabs (KEEPERS stage only)
+      grabAngle: 0,               // panel's resting offset around the sky-ring (rad, 0 = north)
       wormhole: false, missileAt: 0,
       nextVolleyAt: 0, nextSlamAt: 0, final: false,
       // back-launched homing missiles: salvo = seekerBase + seekerBonus,
@@ -53,6 +56,7 @@ export class Game {
       nextCapsuleAt: 0,
       sweep: null,                // { a1, a2, w1, w2, armAt, until }
       barrageUntil: 0, barrageNextAt: 0, barrageAngle: 0, barrageHaste: 1,
+      barrageDir: 1, barrageBeatN: 0,
       nextSpecialAt: 0, specialFlip: false,
     };
   }
@@ -84,7 +88,7 @@ export class Game {
       stats: { kills: 0, bossDmg: 0, keepers: 0 },
     };
     this.players.set(id, p);
-    this.toast(`${p.name} has joined the fireteam`, 'info');
+    this.toast(`${p.name} joined`, 'info');
     return p;
   }
 
@@ -93,7 +97,7 @@ export class Game {
     if (!p) return;
     if (p.hasKey) this.keys.set(nid(), { p: [p.pos[0], 0, p.pos[2]] });
     this.players.delete(id);
-    this.toast(`${p.name} has left the fireteam`, 'info');
+    this.toast(`${p.name} left`, 'info');
     if (this.players.size === 0) { this.resetWorld(); return; }
     if (this.enc.st !== 'LOBBY') this.checkWipe();
   }
@@ -184,10 +188,22 @@ export class Game {
     } else if (m.kind === 'gjally') {
       dmg = WEAPONS.gjally.splashDmg; r = WEAPONS.gjally.splashR; minInterval = 1.0;
     } else if (m.kind === 'grenade') {
-      dmg = GRENADE.dmg; r = GRENADE.r; minInterval = 8;
+      // grenades are per-class: blast numbers differ, and the payload below
+      // (void orb / mend-orbs) hangs off the same validated explode
+      const G = GRENADE[p.cls] || GRENADE.gunslinger;
+      dmg = G.dmg; r = G.r; minInterval = 8;
     } else return;
     if (minInterval && this.t - (p.lastExp[m.kind] || -99) < minInterval) return;
     p.lastExp[m.kind] = this.t;
+    if (m.kind === 'grenade') {
+      if (p.cls === 'voidcaller') {
+        const O = GRENADE.voidcaller.orb;
+        this.dots.set(nid(), { p: pos, by: p.id, until: this.t + O.dur, nextAt: this.t + 0.5 });
+        this.send(null, { t: 'voidOrb', p: pos, r: O.r, dur: O.dur });
+      } else if (p.cls === 'sentinel') {
+        this.spawnHealOrbs(p, pos);
+      }
+    }
 
     let total = 0;
     // snapshot the patch state up front: one splash can legitimately burst several
@@ -237,18 +253,20 @@ export class Game {
       }
     }
     // Rally banner — LOBBY only. First interact on the marked circle plants it;
-    // after that, each guardian can rally at it once (the restock itself is
-    // client-side: ammo and cooldowns live in WeaponSystem).
+    // after that, each guardian can rally at it once (ammo and cooldowns are
+    // client-side in WeaponSystem; the super gauge is server-owned, so it
+    // fills here).
     if (this.enc.st === 'LOBBY') {
       const B = ENC.banner;
       if (!this.banner && dxz(p.pos, B.pos) < B.placeR) {
         this.banner = { p: [...B.pos], by: p.name };
         this.send(null, { t: 'banner', p: this.banner.p, by: p.name });
-        this.toast(`${p.name} plants the fireteam standard — rally to it and gird yourselves.`, 'good');
+        this.toast(`${p.name} plants the standard`, 'good');
         return;
       }
       if (this.banner && !p.restocked && dxz(p.pos, this.banner.p) < B.restockR) {
         p.restocked = true;
+        this.gainSuper(p, 100);
         this.send(p.id, { t: 'restock' });
         return;
       }
@@ -263,7 +281,7 @@ export class Game {
         this.send(p.id, { t: 'unlock', what: 'gjally' });
       }
       this.send(p.id, { t: 'loot', item: 'Gjallarhorn' });
-      this.toast(`${p.name} claims GJALLARHORN from the vault cache!`, 'good');
+      this.toast(`${p.name} claims GJALLARHORN!`, 'good');
     }
   }
 
@@ -313,7 +331,7 @@ export class Game {
     this.enc.wormhole = false; this.enc.stage = null;
     this.endViralPhase();
     this.send(null, { t: 'wipe', stats: this.encStats() });
-    this.toast('Darkness consumes your fireteam...', 'boss');
+    this.toast('Darkness consumes all...', 'boss');
   }
 
   // ---------- boss & encounter ----------
@@ -327,7 +345,6 @@ export class Game {
     for (const p of this.players.values()) p.stats = { kills: 0, bossDmg: 0, keepers: 0 };
     this.spawnBlisters(); // they fester on its back for the whole encounter
     this.send(null, { t: 'bossWake' });
-    this.toast(`${ENC.bossName} awakens!`, 'boss');
     this.enterMech(1);
   }
 
@@ -346,8 +363,8 @@ export class Game {
     e.nextSpecialAt = this.t + ENC.specialFirstDelay;
     e.nextSeekerAt = this.t + ENC.seekerFirst;
     if (round > 1) e.seekerBonus++;
-    if (round > 1) this.toast('The Watcher\'s shield reforms — the pillars whisper a fresh cipher to the stars.', 'warn');
-    else this.toast('Vault Keepers stir beyond the gates, and dormant stars prick through the dark above.', 'info');
+    if (round > 1) this.toast('A fresh cipher whispers.', 'warn');
+    else this.toast('The Keepers stir.', 'info');
   }
 
   colorName(c) { return ARENA.pedestals[c].name; }
@@ -373,8 +390,42 @@ export class Game {
       }
     });
     e.stage = 'KEEPERS';
+    e.nextGrabAt = this.t + this.grabCdNow(); // the boss starts contesting the panel
+    e.grabAngle = 0; // a fresh round's lattice always wakes in the northern sky
     this.send(null, { t: 'keeperSpawn', ids: [...e.keeperIds] });
-    this.toast(`Twin Vault Keepers emerge sheathed in ${this.colorName(sig.colors[0])} and ${this.colorName(sig.colors[1])} wards — the pillars' facing panels burn with star-fragments.`, 'warn');
+    this.toast(`Twin Keepers — ${this.colorName(sig.colors[0])} & ${this.colorName(sig.colors[1])} wards`, 'warn');
+  }
+
+  // The panel-grab interval tightens after every damage phase (round-driven).
+  grabCdNow() {
+    const s = ENC.sigil;
+    return Math.max(s.grabCdMin, s.grabCd - s.grabCdStep * (this.enc.round - 1));
+  }
+
+  // While the twin ciphers are live, the boss periodically tethers the sky
+  // panel and wrenches it around the arena's sky-ring; it rests where it lands.
+  // Pure broadcast — the lattice's position is cosmetic to the server (clients
+  // still report node indices), so the clients replay the same seeded arc from
+  // server time and stay in lockstep (snapshot `ga` re-syncs the resting spot).
+  fireGrab() {
+    const e = this.enc, s = ENC.sigil;
+    e.nextGrabAt = this.t + this.grabCdNow();
+    // swing = |N(mean, sd)|, clamped, random direction: usually a quarter-turn,
+    // the tails throw the panel clear across the arena
+    const u1 = Math.random() || 1e-9, u2 = Math.random();
+    const norm = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+    const swing = Math.min(s.grabRotMax, Math.max(s.grabRotMin, Math.abs(s.grabRotMean + norm * s.grabRotSd)));
+    const a0 = e.grabAngle;
+    const a1 = Math.round((a0 + (Math.random() < 0.5 ? -1 : 1) * swing) * 1000) / 1000;
+    e.grabAngle = a1;
+    this.send(null, {
+      t: 'latticeGrab', at: this.t, dur: s.grabDur,
+      seed: (Math.random() * 0x7fffffff) | 0, a0, a1,
+    });
+    if (!e.grabSeen) {
+      e.grabSeen = true;
+      this.toast('The lattice is seized!', 'warn');
+    }
   }
 
   // A star-node in the sky lattice was shot: toggle it, and if the lit set now
@@ -398,10 +449,9 @@ export class Game {
         t: 'sigilMatch', slot, color: sig.colors[slot],
         code: sig.codes[slot], kid: e.keeperIds[slot],
       });
-      this.toast(`The stars align — the lattice turns its gathered light on the ${this.colorName(sig.colors[slot])} ward.`, 'good');
       if (sig.matched[0] && sig.matched[1]) {
         e.stage = 'HUNT';
-        this.toast('The lattice spends the last of its light and falls dark for good.', 'info');
+        this.toast('The lattice falls dark.', 'info');
       }
       break;
     }
@@ -420,7 +470,7 @@ export class Game {
       if (!k) continue;
       k.shielded = false;
       this.send(null, { t: 'sigilBlast', p: [...k.pos], color: k.color });
-      this.toast(`The ${this.colorName(k.color)} ward bursts apart — the backlash scours everything beside it.`, 'good');
+      this.toast(`The ${this.colorName(k.color)} ward bursts!`, 'good');
       for (const en of [...this.enemies.values()]) {
         if (en.id === k.id || en.shielded || en.type === 'blister') continue;
         if (dxz(en.pos, k.pos) >= ENC.sigil.strikeR) continue;
@@ -442,14 +492,13 @@ export class Game {
     e.finalKeeperId = k.id;
     e.stage = 'FINAL';
     this.send(null, { t: 'heraldRise', id: k.id, color: k.color });
-    this.toast(`The last Keeper ascends above the Watcher, robed in ${this.colorName(k.color)} — its ward hums in sympathy with Lock ${this.colorName(k.color)}.`, 'boss');
   }
 
   // The herald's ward gives out: the rupture takes its bearer with it.
   blastWard(e, killer) {
     e.shielded = false;
     this.send(null, { t: 'wardBlast', p: [...e.pos], color: e.color });
-    this.toast('The herald\'s ward ruptures — the blast unmakes its bearer!', 'good');
+    this.toast('The herald is unmade!', 'good');
     this.killEnemy(e, killer);
   }
 
@@ -459,7 +508,6 @@ export class Game {
     e.wormhole = true;
     e.missileAt = this.t + ENC.sigil.missileFall;
     this.send(null, { t: 'wormhole' });
-    this.toast('The sky tears open above the Watcher — something vast falls through.', 'boss');
   }
 
   applyBossDamage(dmg, p) {
@@ -480,7 +528,6 @@ export class Game {
     e.sweep = null; e.barrageUntil = 0;
     this.clearAdds();
     this.send(null, { t: 'shieldBreak' });
-    this.toast('The shield SHATTERS — VAULTHUR staggers, exposed!', 'good');
     e.nextVolleyAt = this.t + 2.5;
     e.nextSpecialAt = this.t + ENC.dmgSpecialFirst; // unlocked specials chain into the phase
     e.nextSeekerAt = this.t + ENC.seekerFirst; e.seekerBonus++;
@@ -488,7 +535,7 @@ export class Game {
     // the antiviral capsule rain for the blisters on its back
     e.nextCapsuleAt = this.t + ENC.capsuleInterval;
     this.pickFocus();
-    this.toast('Antiviral capsules tumble from the wormhole above — the blisters on the Watcher\'s back quiver.', 'info');
+    this.toast('Capsules fall — blisters quiver.', 'info');
   }
 
   // ---------- damage-phase viral mechanic ----------
@@ -499,7 +546,6 @@ export class Game {
     const f = pick(targets);
     this.enc.focus = f.id;
     this.send(null, { t: 'bossFocus', id: f.id, name: f.name });
-    this.toast(`VAULTHUR marks ${f.name} — the Watcher turns to face them!`, 'boss');
     return f;
   }
 
@@ -533,9 +579,9 @@ export class Game {
     // Refuge no longer comes for free: only a key-woken well shelters the team.
     const woken = [...this.wells.values()].some(w => w.kind === 'refuge');
     const keyOut = this.keys.size > 0 || [...this.players.values()].some(p => p.hasKey);
-    if (woken) this.toast('VAULTHUR charges OBLITERATION — the woken well burns against the dark!', 'boss');
-    else if (keyOut) this.toast('VAULTHUR charges OBLITERATION — the Auric Key trembles in sympathy.', 'boss');
-    else this.toast('VAULTHUR charges OBLITERATION — no light stands ready to answer.', 'boss');
+    if (woken) this.toast('The woken well burns!', 'boss');
+    else if (keyOut) this.toast('The Auric Key trembles.', 'boss');
+    else this.toast('No light stands ready.', 'boss');
   }
 
   fireOblit() {
@@ -549,7 +595,7 @@ export class Game {
       if (w.kind !== 'refuge') continue;
       e.burned.push(w.ped);
       this.wells.delete(id);
-      this.toast(`The Refuge Well at Lock ${ARENA.pedestals[w.ped].name} collapses — its crystal falls dark forever.`, 'warn');
+      this.toast(`Lock ${ARENA.pedestals[w.ped].name}'s well collapses.`, 'warn');
     }
     if (e.st === 'WIPE') return; // the blast erased everyone — there is no next round
     this.enterMech(e.round + 1);
@@ -565,7 +611,6 @@ export class Game {
     e.sweep = null; e.barrageUntil = 0;
     e.nextSpecialAt = this.t + 6; // chained, overlapping specials during the final stand
     e.nextSeekerAt = this.t + ENC.seekerFirst; e.seekerBonus++;
-    this.toast('FINAL STAND — VAULTHUR pours everything into unmaking reality!', 'boss');
   }
 
   victory(p) {
@@ -580,7 +625,6 @@ export class Game {
       if (q.downed || q.dead) { q.downed = false; q.dead = false; q.hp = PLAYER.maxHp / 2; }
     }
     this.send(null, { t: 'bossDied', stats: this.encStats() });
-    this.toast('VAULTHUR HAS FALLEN. The vault cache is yours.', 'good');
   }
 
   clearAdds() {
@@ -622,7 +666,7 @@ export class Game {
       const ang = Math.atan2(e.pos[0], e.pos[2]);
       this.keys.set(nid(), { p: [Math.sin(ang) * ENC.keyDropR, 0, Math.cos(ang) * ENC.keyDropR] });
       if (killer) killer.antiviral = 0;
-      this.toast('A Viral Blister bursts — an AURIC KEY clatters to the arena floor.', 'good');
+      this.toast('A blister drops its KEY!', 'good');
     }
     // A destroyed seeker cooks off the salvo around it: chainDmg to every
     // seeker within chainR, each popping a chainFuse later (the stagger makes
@@ -666,7 +710,7 @@ export class Game {
         // keeperIds is slot-aligned with the sigil codes — null, don't compact
         enc.keeperIds[enc.keeperIds.indexOf(e.id)] = null;
         if (enc.keeperIds.every(id => id === null)) this.spawnFinalKeeper();
-        else this.toast('One Keeper falls — its twin still walks the arena.', 'good');
+        else this.toast('Its twin still walks.', 'good');
       }
     }
   }
@@ -828,7 +872,6 @@ export class Game {
       armAt: this.t + ENC.sweepWarn / haste, until: this.t + ENC.sweepDur,
     };
     this.send(null, { t: 'sweep' });
-    this.toast('VAULTHUR carves the arena into burning wedges!', 'boss');
   }
 
   startBarrage() {
@@ -837,8 +880,9 @@ export class Game {
     e.barrageUntil = this.t + ENC.barrageDur;
     e.barrageNextAt = this.t;
     e.barrageAngle = Math.random() * Math.PI;
+    e.barrageDir = Math.random() < 0.5 ? -1 : 1; // each barrage picks its spin
+    e.barrageBeatN = 0;
     this.send(null, { t: 'barrage' });
-    this.toast('VAULTHUR unleashes a rhythmic barrage!', 'boss');
   }
 
   // ---------- back-launched homing seekers ----------
@@ -851,6 +895,8 @@ export class Game {
     const targets = this.alivePlayers();
     if (!targets.length) return;
     const n = ENC.seekerBase + e.seekerBonus;
+    // during damage the whole salvo hunts the marked player, like the volleys
+    const focus = e.st === 'DAMAGE' ? targets.find(p => p.id === e.focus) : null;
     for (let i = 0; i < n; i++) {
       const a = e.bossYaw + Math.PI + (i - (n - 1) / 2) * 0.5; // fan across the back
       const out = [Math.sin(a), 0, Math.cos(a)];
@@ -859,7 +905,7 @@ export class Game {
         ENC.bossPos[1] + 2.5,
         ENC.bossPos[2] + out[2] * (ENC.bossBodyR - 0.8),
       ]);
-      s.target = pick(targets).id;
+      s.target = (focus || pick(targets)).id;
       s.popUntil = this.t + ENC.seekerPop;      // climb clear of the hull first
       s.launchV = [out[0] * 5, 7, out[2] * 5];
       s.dieAt = this.t + ENC.seekerLife;        // endless kiting still ends
@@ -868,7 +914,7 @@ export class Game {
     this.send(null, { t: 'seekers', n });
     if (!e.seekerSeen) {
       e.seekerSeen = true;
-      this.toast('Hatches grind open across the Watcher\'s back — brittle-shelled fire crawls out, slow and certain.', 'boss');
+      this.toast('Brittle-shelled fire crawls out.', 'boss');
     }
   }
 
@@ -993,14 +1039,21 @@ export class Game {
       if (e.barrageUntil > this.t) {
         if (this.t >= e.barrageNextAt) {
           const haste = e.barrageHaste || 1;
-          e.barrageNextAt = this.t + ENC.barrageBeat / haste;
+          const beat = ENC.barrageBeat / haste;
+          e.barrageNextAt = this.t + beat;
           e.barrageAngle += 0.5;
+          e.barrageBeatN++;
+          // beat-locked bob: full sine every two beats, consecutive rings
+          // half a cycle apart so the swarm weaves in time with the drum
+          const bobF = Math.PI / beat;
+          const bobPh = (e.barrageBeatN % 2) * Math.PI;
           for (let i = 0; i < ENC.barrageCount; i++) {
             const a = e.barrageAngle + i * Math.PI * 2 / ENC.barrageCount;
             this.projs.set(nid(), {
-              k: 'hell', p: [Math.cos(a) * 2, 1.2, Math.sin(a) * 2],
+              k: 'hell', p: [Math.cos(a) * 2, ENC.barrageY, Math.sin(a) * 2],
               v: [Math.cos(a) * ENC.barrageSpeed * haste, 0, Math.sin(a) * ENC.barrageSpeed * haste],
-              dmg: ENC.barrageDmg, r: 0.55, until: this.t + 7,
+              w: ENC.barrageCurl * haste * e.barrageDir, bobF, bobPh, bobT0: this.t,
+              dmg: ENC.barrageDmg, r: 0.55, until: this.t + 9,
             });
           }
         }
@@ -1056,8 +1109,99 @@ export class Game {
     }
   }
 
+  // ---------- class grenades ----------
+
+  // Sentinel: the burst splits into mend-orbs that hunt the most-wounded
+  // guardians (chosen now, at the split). They ride the snapshot `projs` list
+  // (k 'heal') so clients render them like any other server projectile.
+  spawnHealOrbs(p, pos) {
+    const H = GRENADE.sentinel.heal;
+    const hurt = this.alivePlayers().sort((a, b) => a.hp - b.hp);
+    if (!hurt.length) return;
+    for (let i = 0; i < H.n; i++) {
+      const tgt = hurt[Math.min(i, hurt.length - 1)];
+      this.projs.set(nid(), {
+        k: 'heal', p: [pos[0], Math.max(0.6, pos[1]), pos[2]], v: [0, 0, 0],
+        spd: H.speed, tgt: tgt.id, until: this.t + H.life,
+      });
+    }
+  }
+
+  // Perfect tracking at a pace that builds: walking can't shake your own
+  // medicine, sprinting only delays it. Terrain never stops light.
+  // Returns true once the orb is spent (delivered or expired).
+  tickHealOrb(pr, dt) {
+    const H = GRENADE.sentinel.heal;
+    if (this.t > pr.until) return true;
+    let tgt = this.players.get(pr.tgt);
+    if (!tgt || !this.alive(tgt)) {
+      tgt = this.alivePlayers().sort((a, b) => a.hp - b.hp)[0];
+      if (!tgt) return true;
+      pr.tgt = tgt.id;
+    }
+    pr.spd += H.accel * dt;
+    const aim = [tgt.pos[0], tgt.pos[1] + 1.0, tgt.pos[2]];
+    const d = d3(pr.p, aim) || 1;
+    pr.v = [(aim[0] - pr.p[0]) / d * pr.spd, (aim[1] - pr.p[1]) / d * pr.spd, (aim[2] - pr.p[2]) / d * pr.spd];
+    for (const i of [0, 1, 2]) pr.p[i] += pr.v[i] * dt;
+    if (d < 0.9) {
+      tgt.hp = Math.min(PLAYER.maxHp, tgt.hp + H.amount);
+      this.send(null, {
+        t: 'healBurst', id: tgt.id, amt: H.amount,
+        p: pr.p.map(v => Math.round(v * 100) / 100),
+      });
+      return true;
+    }
+    return false;
+  }
+
+  // Voidcaller orbs gnaw at everything in their area twice a second — flat
+  // damage inside r (a zone, not a blast). Wards and blisters stay sealed.
+  tickDots() {
+    const O = GRENADE.voidcaller.orb;
+    for (const [id, z] of this.dots) {
+      if (this.t > z.until) { this.dots.delete(id); continue; }
+      if (this.t < z.nextAt) continue;
+      z.nextAt = this.t + 0.5;
+      const owner = this.players.get(z.by) || null;
+      const tickDmg = O.dps * 0.5;
+      let total = 0;
+      for (const e of [...this.enemies.values()]) {
+        if (e.type === 'blister' || e.shielded) continue;
+        const d = d3(z.p, [e.pos[0], e.type === 'seeker' ? e.pos[1] : 1, e.pos[2]]);
+        if (d > O.r) continue;
+        e.hp -= tickDmg; total += tickDmg;
+        if (e.hp <= 0) this.killEnemy(e, owner);
+      }
+      // boss super credit comes from applyBossDamage itself
+      if (d3(z.p, ENC.bossPos) < O.r + 2) this.applyBossDamage(tickDmg, owner);
+      if (owner && total && owner.goldenUntil <= this.t) this.gainSuper(owner, total * SUPER.perDamage);
+    }
+  }
+
   tickProjectiles(dt) {
     for (const [id, pr] of this.projs) {
+      if (pr.k === 'heal') {
+        if (this.tickHealOrb(pr, dt)) this.projs.delete(id);
+        continue;
+      }
+      if (pr.w) {
+        // barrage spiral: rotate the heading; the curl decays so the arm
+        // straightens outward and dies on the wall instead of orbiting
+        const turn = pr.w * dt;
+        const c = Math.cos(turn), s = Math.sin(turn);
+        const vx = pr.v[0] * c - pr.v[2] * s;
+        pr.v[2] = pr.v[0] * s + pr.v[2] * c;
+        pr.v[0] = vx;
+        pr.w *= Math.max(0, 1 - ENC.barrageCurlDecay * dt);
+      }
+      if (pr.bobF) {
+        // pin the exact sine each tick; v[1] carries the derivative so the
+        // client's linear extrapolation (p + v·age) tracks it between snapshots
+        const ph = pr.bobF * (this.t - pr.bobT0) + pr.bobPh;
+        pr.p[1] = ENC.barrageY + ENC.barrageBobAmp * Math.sin(ph);
+        pr.v[1] = ENC.barrageBobAmp * pr.bobF * Math.cos(ph);
+      }
       pr.p[0] += pr.v[0] * dt; pr.p[1] += pr.v[1] * dt; pr.p[2] += pr.v[2] * dt;
       let dead = this.t > pr.until || pr.p[1] < 0 ||
         Math.hypot(pr.p[0], pr.p[2]) > ARENA.radius - 0.3;
@@ -1128,7 +1272,7 @@ export class Game {
           p.antiviral++;
           this.send(p.id, { t: 'capsule', n: p.antiviral });
           if (p.antiviral >= ENC.capsulesNeeded) {
-            this.toast(`${p.name} is saturated with antiviral nanites — blister-flesh recoils from their light.`, 'good');
+            this.toast(`Blister-flesh recoils from ${p.name}.`, 'good');
           }
           break;
         }
@@ -1139,8 +1283,10 @@ export class Game {
           if (dxz(p.pos, k.p) > ENC.pickupR) continue;
           this.keys.delete(kid);
           p.hasKey = true;
-          this.send(p.id, { t: 'keyGet' });
-          this.toast(`${p.name} claims the AURIC KEY — somewhere, a dormant well stirs in answer.`, 'good');
+          // broadcast (with the key id) so every client clears the floor key
+          // immediately — the picker alone gets the chime/tip client-side
+          this.send(null, { t: 'keyGet', id: p.id, kid });
+          this.toast(`${p.name} claims the AURIC KEY`, 'good');
           break;
         }
       }
@@ -1154,7 +1300,7 @@ export class Game {
           p.hasKey = false;
           this.wells.set(nid(), { p: [...ped.p], r: 6, until: this.t + 9999, kind: 'refuge', ped: i });
           this.send(null, { t: 'wellWake', ped: i, by: p.id });
-          this.toast(`The Refuge Well at Lock ${ped.name} blazes awake — one last shelter, one last time.`, 'good');
+          this.toast(`Lock ${ped.name}'s well blazes awake.`, 'good');
         });
       }
     }
@@ -1187,6 +1333,8 @@ export class Game {
           if (!e.stage && this.t >= e.nextKeeperAt) this.spawnKeepers();
         }
         if (e.strikes.length) this.fireStrikes();
+        // the boss harasses the live lattice — hidden panels are left alone
+        if (e.stage === 'KEEPERS' && this.t >= e.nextGrabAt) this.fireGrab();
         // standing in the herald's lock circle kindles the wardbreaker blessing
         // (a timed buff — only blessed fire can wound the herald's ward)
         if (e.stage === 'FINAL') {
@@ -1197,7 +1345,7 @@ export class Game {
               if (dxz(p.pos, ped.p) >= ENC.sigil.pedestalR) continue;
               if (p.wardUntil <= this.t) {
                 this.send(p.id, { t: 'wardBuff' });
-                this.toast(`${p.name} kindles the ${this.colorName(k.color)} lock's light — the herald's ward lies bare to them.`, 'good');
+                this.toast(`${p.name} kindles the ${this.colorName(k.color)} lock.`, 'good');
               }
               p.wardUntil = this.t + ENC.sigil.wardBuffDur;
             }
@@ -1205,7 +1353,7 @@ export class Game {
         }
         if (e.stage === 'MISSILE' && this.t >= e.missileAt) {
           this.send(null, { t: 'missile' });
-          this.toast('The falling lance detonates against the Watcher — its shield is ASH.', 'good');
+          this.toast('The shield is ASH.', 'good');
           this.enterDamage();
         }
         break;
@@ -1225,7 +1373,7 @@ export class Game {
         break;
       case 'FINAL':
         if (this.t >= e.ends && !e.bossDead) {
-          this.toast('Reality folds. You are unmade.', 'boss');
+          this.toast('Reality folds.', 'boss');
           this.startWipe();
         }
         break;
@@ -1240,8 +1388,11 @@ export class Game {
     if (e.st !== 'LOBBY' && e.st !== 'WIPE' && e.st !== 'VICTORY') {
       this.tickEnemies(dt);
       this.tickBoss(dt);
-      this.tickProjectiles(dt);
     }
+    // projectiles tick everywhere: mend-orbs must fly even in the lobby (enemy
+    // shots only exist mid-fight anyway, and dmgPlayer gates LOBBY/VICTORY)
+    this.tickProjectiles(dt);
+    this.tickDots();
     this.tickPlayers(dt);
 
     this.snapAcc += dt;
@@ -1261,7 +1412,8 @@ export class Game {
         wh: e.wormhole, mAt: e.missileAt,
         // sigil layout: twin/final colors, per-pillar owner + segment, lattice
         // state, and which codes have been answered
-        sig: sig ? { c: sig.colors, o: sig.owners, s: sig.segs, g: sig.grid, m: sig.matched } : null,
+        // ga: the panel's resting sky-ring angle — late/lossy clients re-home
+        sig: sig ? { c: sig.colors, o: sig.owners, s: sig.segs, g: sig.grid, m: sig.matched, ga: e.grabAngle } : null,
         sweep: e.sweep ? {
           // w1/w2 let clients extrapolate the beams between 10 Hz snapshots
           a1: Math.round(e.sweep.a1 * 1000) / 1000, a2: Math.round(e.sweep.a2 * 1000) / 1000,

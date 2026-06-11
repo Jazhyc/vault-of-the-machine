@@ -101,12 +101,25 @@ export function buildGuardian(name, cls) {
 // rings, bricks, capsules), so all geometries/materials are shared module
 // singletons — creating a view allocates only cheap Mesh wrappers.
 const PROJ_GEO = new THREE.SphereGeometry(1, 10, 8);
+// barrage ember: molten core in a spinning additive wire cage — must read
+// hotter and angrier than the boss's pink volley orbs
+const HELL_CAGE_GEO = new THREE.OctahedronGeometry(1.5, 0);
+const HELL_CAGE_MAT = new THREE.MeshBasicMaterial({ color: 0xffb84d, wireframe: true, transparent: true,
+  opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false });
 const PROJ_STYLE = {
   bolt:    { mat: new THREE.MeshBasicMaterial({ color: 0x46c8ff }), size: 0.26 },
   heavy:   { mat: new THREE.MeshBasicMaterial({ color: 0xc77dff }), size: 0.5 },
   bossOrb: { mat: new THREE.MeshBasicMaterial({ color: 0xff5d8f }), size: 0.85 },
-  hell:    { mat: new THREE.MeshBasicMaterial({ color: 0xff7ab8 }), size: 0.5 },
+  hell:    { mat: new THREE.MeshBasicMaterial({ color: 0xff7a1c }), size: 0.5, spin: 4.2 },
+  heal:    { mat: new THREE.MeshBasicMaterial({ color: 0x7dffcf }), size: 0.3 }, // sentinel mend-orbs
 };
+function buildProjMesh(k) {
+  const st = PROJ_STYLE[k] || PROJ_STYLE.bolt;
+  const m = noRay(new THREE.Mesh(PROJ_GEO, st.mat));
+  m.scale.setScalar(st.size);
+  if (k === 'hell') m.add(noRay(new THREE.Mesh(HELL_CAGE_GEO, HELL_CAGE_MAT)));
+  return m;
+}
 const BRICK_GEO = new THREE.BoxGeometry(0.5, 0.3, 0.3);
 const BRICK_MATS = {
   heavy: new THREE.MeshBasicMaterial({ color: 0xc77dff }),
@@ -137,6 +150,7 @@ const BANNER_TOP_MAT = new THREE.MeshBasicMaterial({ color: 0xf0e9d8 });
 const BANNER_CLOTH_MAT = new THREE.MeshStandardMaterial({ color: 0xe8e2d2, roughness: 0.9, metalness: 0,
   emissive: 0xe8e2d2, emissiveIntensity: 0.12, side: THREE.DoubleSide });
 const BANNER_SPOT_MAT = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.55, depthWrite: false });
+const FOCUS_RING_MAT = new THREE.MeshBasicMaterial({ color: 0xff3347, transparent: true, opacity: 0.6, depthWrite: false });
 const WELL_MATS = {
   ward: {
     dome: new THREE.MeshBasicMaterial({ color: 0x4cc9f0, transparent: true, opacity: 0.16, side: THREE.DoubleSide, depthWrite: false }),
@@ -152,7 +166,7 @@ const WELL_MATS = {
 // uploads (first volley, first brick, …) never land mid-fight.
 export function buildEntityWarmup() {
   const g = new THREE.Group();
-  for (const st of Object.values(PROJ_STYLE)) g.add(new THREE.Mesh(PROJ_GEO, st.mat));
+  for (const k of Object.keys(PROJ_STYLE)) g.add(buildProjMesh(k));
   g.add(new THREE.Mesh(BRICK_GEO, BRICK_MATS.heavy));
   g.add(new THREE.Mesh(BRICK_GEO, BRICK_MATS.energy));
   g.add(new THREE.Mesh(PILL_GEO, PILL_MAT));
@@ -170,6 +184,7 @@ export function buildEntityWarmup() {
   g.add(new THREE.Mesh(BANNER_TOP_GEO, BANNER_TOP_MAT));
   g.add(new THREE.Mesh(BANNER_CLOTH_GEO, BANNER_CLOTH_MAT));
   g.add(new THREE.Mesh(WELL_RING_GEO, BANNER_SPOT_MAT));
+  g.add(new THREE.Mesh(WELL_RING_GEO, FOCUS_RING_MAT));
   return g;
 }
 
@@ -187,11 +202,34 @@ function buildBanner() {
   return { grp, cloth };
 }
 
+// Status glow for a guardian (one pooled light each), highest priority first:
+// the boss's mark outranks everything, then the golden super, then the auric
+// key, then a full antiviral charge.
+function statusGlow(d, focused, golden) {
+  if (focused) return { c: 0xff3347, i: 3.2 };
+  if (golden) return { c: 0xffb703, i: 3 };
+  if (d.ky) return { c: 0xffd34d, i: 2.4 };
+  if (d.av >= ENC.capsulesNeeded) return { c: 0x4ade80, i: 2.4 };
+  return null;
+}
+
 export class EntityManager {
   constructor(scene, myId, glowPool = []) {
     this.scene = scene;
     this.myId = myId;
-    this.glowPool = glowPool; // fixed scene-level lights (golden buff glows)
+    this.glowPool = glowPool; // fixed scene-level lights (status glows)
+    // one pool light is reserved for the local player's own glow — the pool
+    // holds MAX_PLAYERS lights and remotes number at most MAX_PLAYERS - 1
+    this.selfGlow = glowPool.find(l => !l.userData.used) || null;
+    if (this.selfGlow) this.selfGlow.userData.used = true;
+    this.focusId = null;
+    this.myData = null;
+    // red circle pinned under whichever guardian the boss hard-focuses
+    this.focusRing = noRay(new THREE.Mesh(WELL_RING_GEO, FOCUS_RING_MAT));
+    this.focusRing.scale.setScalar(1.7);
+    this.focusRing.position.y = 0.05;
+    this.focusRing.visible = false;
+    scene.add(this.focusRing);
     this.guardians = new Map();
     this.projs = new Map();
     this.bricks = new Map();
@@ -213,6 +251,8 @@ export class EntityManager {
 
   sync(snap, now) {
     this.lastSnapAt = now;
+    this.focusId = snap.enc ? snap.enc.focus : null;
+    this.myData = snap.players.find(p => p.id === this.myId) || null;
     // --- remote players ---
     const seenP = new Set();
     for (const p of snap.players) {
@@ -239,11 +279,9 @@ export class EntityManager {
 
     // --- generic id-keyed sets ---
     this.syncSet(this.projs, snap.projs, (pr) => {
-      const st = PROJ_STYLE[pr.k] || PROJ_STYLE.bolt;
-      const m = noRay(new THREE.Mesh(PROJ_GEO, st.mat));
-      m.scale.setScalar(st.size);
+      const m = buildProjMesh(pr.k);
       this.scene.add(m);
-      return { mesh: m };
+      return { mesh: m, spin: (PROJ_STYLE[pr.k] || PROJ_STYLE.bolt).spin };
     }, (v, pr) => { v.p = [...pr.p]; v.v = [...pr.v]; v.at = now; });
 
     this.syncSet(this.bricks, snap.bricks, (b) => {
@@ -336,7 +374,7 @@ export class EntityManager {
     }
   }
 
-  update(dt, renderTime, now) {
+  update(dt, renderTime, now, myPos = null) {
     this.t += dt;
     for (const v of this.guardians.values()) {
       const s = v.interp.at(renderTime);
@@ -348,10 +386,11 @@ export class EntityManager {
       v.key.visible = !!d.ky;
       if (d.ky) { v.key.rotation.y += dt * 3; v.key.position.y = 3.1 + Math.sin(this.t * 3) * 0.12; }
       const golden = d.gu && d.gu > 0 && this.goldenActive(d);
+      const st = d.dd ? null : statusGlow(d, d.id === this.focusId, golden);
       if (v.glow) {
         v.glow.position.set(s.p[0], s.p[1] + 1.5, s.p[2]);
-        v.glow.intensity = golden && !d.dd ? 3 : 0;
-        v.glow.color.set(0xffb703);
+        v.glow.intensity = st ? st.i : 0;
+        if (st) v.glow.color.set(st.c);
       }
       v.body.rotation.z = d.dn ? Math.PI / 2 : 0;
       v.body.position.y = d.dn ? 0.5 : 1.1;
@@ -361,6 +400,7 @@ export class EntityManager {
     for (const v of this.projs.values()) {
       const age = now - v.at;
       v.mesh.position.set(v.p[0] + v.v[0] * age, v.p[1] + v.v[1] * age, v.p[2] + v.v[2] * age);
+      if (v.spin) { v.mesh.rotation.x += dt * v.spin * 0.6; v.mesh.rotation.y += dt * v.spin; }
     }
     for (const v of this.bricks.values()) {
       v.mesh.position.set(v.p[0], 0.4, v.p[2]);
@@ -395,6 +435,36 @@ export class EntityManager {
     if (this.chestMesh) this.chestMesh.rotation.y += dt * 0.5;
     if (this.bannerSpot.visible) this.bannerSpot.material.opacity = 0.4 + Math.sin(this.t * 2.5) * 0.18;
     if (this.banner) this.banner.cloth.rotation.y = Math.sin(this.t * 1.7) * 0.12; // lazy flutter
+
+    // the local player's own status light (remotes see theirs via v.glow)
+    if (this.selfGlow && myPos) {
+      const d = this.myData;
+      const st = d && !d.dd ? statusGlow(d, d.id === this.focusId, this.goldenActive(d)) : null;
+      this.selfGlow.position.set(myPos.x, myPos.y + 1.5, myPos.z);
+      this.selfGlow.intensity = st ? st.i : 0;
+      if (st) this.selfGlow.color.set(st.c);
+    }
+    // red mark ring pinned under the boss's quarry — every client sees it,
+    // the quarry included (it follows their own feet)
+    let fp = null;
+    if (this.focusId === this.myId) fp = myPos;
+    else {
+      const fv = this.guardians.get(this.focusId);
+      if (fv && !fv.data.dd) fp = fv.g.position;
+    }
+    this.focusRing.visible = !!fp;
+    if (fp) {
+      this.focusRing.position.set(fp.x, 0.05, fp.z);
+      this.focusRing.material.opacity = 0.45 + Math.sin(this.t * 7) * 0.25;
+    }
+  }
+
+  // keyGet broadcast: clear the claimed key at once instead of waiting a snapshot
+  removeKeyDrop(id) {
+    const v = this.keyDrops.get(id);
+    if (!v) return;
+    this.scene.remove(v.mesh);
+    this.keyDrops.delete(id);
   }
 
   // Golden buff timestamps are server-time; we just trust the flag while the

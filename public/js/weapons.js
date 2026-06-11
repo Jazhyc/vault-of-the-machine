@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { WEAPONS, GRENADE, MELEE, SUPER, ENC, CLASS_SUPER } from '/shared/constants.js';
+import { WEAPONS, GRENADE, MELEE, SUPER, ENC, CLASS_SUPER, CLASSES } from '/shared/constants.js';
 
 const noRay = (o) => { o.traverse(c => { c.raycast = () => {}; }); return o; };
 
@@ -10,12 +10,14 @@ const PROJ_GEO = new THREE.SphereGeometry(1, 10, 8);
 const PROJ_MATS = new Map(); // color -> material
 const WOLF_GEO = new THREE.SphereGeometry(0.13, 8, 6);
 const WOLF_MAT = new THREE.MeshBasicMaterial({ color: 0x9dffc8 });
+const SWARM_MAT = new THREE.MeshBasicMaterial({ color: 0xffc94d }); // gunslinger grenade embers
 
 // Drawn once at boot so the shared projectile/wolf buffers are pre-uploaded.
 export function buildWeaponFxWarmup() {
   const g = new THREE.Group();
   g.add(new THREE.Mesh(PROJ_GEO, WOLF_MAT));
   g.add(new THREE.Mesh(WOLF_GEO, WOLF_MAT));
+  g.add(new THREE.Mesh(WOLF_GEO, SWARM_MAT));
   return g;
 }
 
@@ -181,7 +183,8 @@ export class WeaponSystem {
     this.meleeAnim = 0;
     this.fireKick = 0;
     this.projectiles = [];
-    this.wolves = []; // Gjallarhorn wolfpack missiles
+    this.wolves = []; // homing missiles: Gjallarhorn wolfpack + gunslinger grenade embers
+    this.voidZones = []; // local voidcaller orbs (predicted DoT numbers only)
     this.now = 0;
 
     // viewmodel rig
@@ -344,6 +347,10 @@ export class WeaponSystem {
 
   golden() { return this.ctx.player.golden; }
 
+  // Blisters are sealed against ordinary fire — mirrors the server's antiviral
+  // gate (onHit/onExplode) so the player sees IMMUNE instead of fake numbers.
+  blisterSealed(v) { return v?.ty === 'blister' && !this.ctx.enemies.localEmpowered; }
+
   fireHitscan() {
     const d = this.def, s = this.st;
     s.mag--;
@@ -393,7 +400,7 @@ export class WeaponSystem {
       // carrying the wardbreaker blessing — their shots go through as normal.
       if (ent.kind === 'enemy') {
         const v = this.ctx.enemies.views.get(ent.id);
-        if (v?.sh && !(v.shp != null && this.ctx.player.wardbreak)) {
+        if (this.blisterSealed(v) || (v?.sh && !(v.shp != null && this.ctx.player.wardbreak))) {
           if (!immuneShown) {
             immuneShown = true;
             this.ctx.effects.damageNumber(hit.point, 'IMMUNE', 'immune');
@@ -465,7 +472,7 @@ export class WeaponSystem {
     let best = null, bd = 35;
     const wp = new THREE.Vector3();
     for (const [id, v] of this.ctx.enemies.views) {
-      if (v.sh) continue; // wolves don't waste themselves on warded keepers
+      if (v.sh || this.blisterSealed(v)) continue; // wolves don't waste themselves on warded keepers or sealed blisters
       v.group.getWorldPosition(wp);
       const d = fromPos.distanceTo(new THREE.Vector3(wp.x, wp.y + 1, wp.z));
       if (d < bd) { bd = d; best = { kind: 'enemy', id }; }
@@ -492,30 +499,65 @@ export class WeaponSystem {
     mesh.raycast = () => {};
     mesh.position.copy(fromPos);
     this.ctx.scene.add(mesh);
+    const d = WEAPONS.gjally;
     const dir = new THREE.Vector3((Math.random() - 0.5), 0.7 + Math.random() * 0.5, (Math.random() - 0.5)).normalize();
-    this.wolves.push({ pos: fromPos.clone(), vel: dir.multiplyScalar(WEAPONS.gjally.wolfSpeed * 0.6), target, mesh, life: 4 });
+    this.wolves.push({ pos: fromPos.clone(), vel: dir.multiplyScalar(d.wolfSpeed * 0.6), target, mesh,
+      life: 4, spd: d.wolfSpeed, dmg: d.wolfDmg, wkey: 'gjally', numKind: 'super' });
+  }
+
+  // Gunslinger grenade: the blast hurls four embers that hunt the nearest
+  // damageable targets — distinct enemies first, the exposed boss as backstop.
+  acquireSwarmTargets(fromPos, n) {
+    const cands = [];
+    const wp = new THREE.Vector3();
+    for (const [id, v] of this.ctx.enemies.views) {
+      if (v.sh || this.blisterSealed(v)) continue;
+      v.group.getWorldPosition(wp);
+      cands.push({ t: { kind: 'enemy', id }, d: fromPos.distanceTo(new THREE.Vector3(wp.x, wp.y + 1, wp.z)) });
+    }
+    cands.sort((a, b) => a.d - b.d);
+    const out = cands.slice(0, n).map(c => c.t);
+    const enc = this.ctx.getEnc();
+    const bossOk = enc && !enc.shield && !enc.bossDead;
+    while (out.length < n) out.push(bossOk ? { kind: 'boss' } : out[0] || null);
+    return out;
+  }
+
+  spawnSwarm(fromPos) {
+    const S = GRENADE.gunslinger.swarm;
+    const targets = this.acquireSwarmTargets(fromPos, S.n);
+    for (let i = 0; i < S.n; i++) {
+      const mesh = new THREE.Mesh(WOLF_GEO, SWARM_MAT);
+      mesh.scale.setScalar(1.5);
+      mesh.raycast = () => {};
+      mesh.position.copy(fromPos);
+      this.ctx.scene.add(mesh);
+      const a = (i / S.n) * Math.PI * 2;
+      const dir = new THREE.Vector3(Math.cos(a) * 0.7, 1, Math.sin(a) * 0.7).normalize();
+      this.wolves.push({ pos: fromPos.clone(), vel: dir.multiplyScalar(S.speed * 0.8), target: targets[i], mesh,
+        life: 4, spd: S.speed, dmg: S.dmg, wkey: 'gswarm', numKind: 'normal', boomCol: 0xffb703 });
+    }
   }
 
   updateWolves(dt) {
-    const d = WEAPONS.gjally;
     for (let i = this.wolves.length - 1; i >= 0; i--) {
       const w = this.wolves[i];
       w.life -= dt;
       let tp = w.target ? this.wolfTargetPos(w.target) : null;
-      if (!tp && w.target) { w.target = this.acquireWolfTarget(w.pos); tp = w.target ? this.wolfTargetPos(w.target) : null; }
+      if (!tp) { w.target = this.acquireWolfTarget(w.pos); tp = w.target ? this.wolfTargetPos(w.target) : null; }
       if (tp) {
-        const desired = tp.clone().sub(w.pos).normalize().multiplyScalar(d.wolfSpeed);
+        const desired = tp.clone().sub(w.pos).normalize().multiplyScalar(w.spd);
         w.vel.lerp(desired, Math.min(1, 7 * dt));
       }
       w.pos.addScaledVector(w.vel, dt);
       w.mesh.position.copy(w.pos);
       const reached = tp && w.pos.distanceTo(tp) < (w.target.kind === 'boss' ? ENC.bossBodyR : 1.5);
       if (reached) {
-        let dmg = d.wolfDmg * (this.golden() ? SUPER.golden.mul : 1);
+        let dmg = w.dmg * (this.golden() ? SUPER.golden.mul : 1);
         dmg = Math.round(dmg);
-        this.ctx.net.hit(w.target.kind === 'boss' ? 'boss' : w.target.id, dmg, 'gjally');
-        this.ctx.effects.damageNumber(w.pos, dmg, 'super');
-        this.ctx.effects.explosion(w.pos, 'death');
+        this.ctx.net.hit(w.target.kind === 'boss' ? 'boss' : w.target.id, dmg, w.wkey);
+        this.ctx.effects.damageNumber(w.pos, dmg, this.golden() ? 'super' : w.numKind);
+        this.ctx.effects.explosion(w.pos, 'death', w.boomCol);
         this.ctx.audio.hitTick(true);
       } else if (w.life > 0 && w.pos.y > 0) {
         continue;
@@ -541,6 +583,9 @@ export class WeaponSystem {
     return p;
   }
 
+  clsKey() { return this.ctx.getCls ? this.ctx.getCls() : 'gunslinger'; }
+  clsColor() { return new THREE.Color(CLASSES[this.clsKey()]?.color || '#7ae582').getHex(); }
+
   throwGrenade() {
     if (!this.ctx.player.alive || this.now < this.grenadeReadyAt) return;
     this.grenadeReadyAt = this.now + GRENADE.cd;
@@ -550,7 +595,7 @@ export class WeaponSystem {
     this.ctx.net.fire('grenade', from.toArray(), dir.toArray());
     const vel = dir.multiplyScalar(GRENADE.speed);
     vel.y += 3;
-    this.spawnProjectile('grenade', from, vel, 0x7ae582, 0.14);
+    this.spawnProjectile('grenade', from, vel, this.clsColor(), 0.14);
   }
 
   melee() {
@@ -567,9 +612,12 @@ export class WeaponSystem {
       this.ctx.effects.damageNumber(hit.point, 'IMMUNE', 'immune');
       return;
     }
-    if (ent.kind === 'enemy' && this.ctx.enemies.views.get(ent.id)?.sh) {
-      this.ctx.effects.damageNumber(hit.point, 'IMMUNE', 'immune');
-      return;
+    if (ent.kind === 'enemy') {
+      const v = this.ctx.enemies.views.get(ent.id);
+      if (v?.sh || this.blisterSealed(v)) {
+        this.ctx.effects.damageNumber(hit.point, 'IMMUNE', 'immune');
+        return;
+      }
     }
     let dmg = MELEE.dmg * (this.golden() ? SUPER.golden.mul : 1);
     dmg = Math.round(dmg);
@@ -585,7 +633,7 @@ export class WeaponSystem {
     if (this.ctx.player.sup < 99.5) {
       if (this.now - (this.lastSupNag || 0) > 1.5) {
         this.lastSupNag = this.now;
-        this.ctx.hud.toast(`Super not ready — ${Math.floor(this.ctx.player.sup)}%`, 'info');
+        this.ctx.hud.toast(`Super ${Math.floor(this.ctx.player.sup)}%`, 'info');
       }
       return;
     }
@@ -606,16 +654,26 @@ export class WeaponSystem {
   detonate(p) {
     const kind = p.kind === 'gjallyOrb' ? 'gjally' : p.kind;
     this.ctx.net.explode(kind, [p.pos.x, p.pos.y, p.pos.z]);
-    this.ctx.effects.explosion(p.pos, kind);
+    this.ctx.effects.explosion(p.pos, kind, kind === 'grenade' ? this.clsColor() : null);
     this.ctx.audio.explosion(kind === 'nova');
     this.predictAoeNumbers(p.pos, kind);
+    if (kind === 'grenade') {
+      const cls = this.clsKey();
+      if (cls === 'gunslinger') this.spawnSwarm(p.pos);
+      // the orb visual arrives via the server's voidOrb broadcast; this list
+      // only mirrors the 0.5s gnaw ticks as predicted damage numbers
+      if (cls === 'voidcaller') {
+        this.voidZones.push({ pos: p.pos.clone(), until: this.now + GRENADE.voidcaller.orb.dur, nextAt: this.now + 0.5 });
+      }
+    }
   }
 
   predictAoeNumbers(pos, kind) {
     const base = kind === 'nova' ? SUPER.nova
-      : kind === 'grenade' ? { dmg: GRENADE.dmg, r: GRENADE.r }
+      : kind === 'grenade' ? (GRENADE[this.clsKey()] || GRENADE.gunslinger)
         : kind === 'gjally' ? { dmg: WEAPONS.gjally.splashDmg, r: WEAPONS.gjally.splashR }
           : { dmg: WEAPONS.rocket.splashDmg, r: WEAPONS.rocket.splashR };
+    if (!(base.r > 0)) return; // the sentinel grenade mends — nothing to predict
     let any = false;
     const wp = new THREE.Vector3();
     for (const v of this.ctx.enemies.views.values()) {
@@ -624,7 +682,8 @@ export class WeaponSystem {
       const ey = v.ty === 'blister' || v.ty === 'seeker' ? wp.y : 1; // mirrors the server's splash check
       const d = pos.distanceTo(new THREE.Vector3(wp.x, ey, wp.z));
       if (d > base.r) continue;
-      this.ctx.effects.damageNumber(new THREE.Vector3(wp.x, ey + 0.6, wp.z), Math.round(base.dmg * (1 - 0.55 * d / base.r)), 'crit');
+      if (this.blisterSealed(v)) this.ctx.effects.damageNumber(new THREE.Vector3(wp.x, ey + 0.6, wp.z), 'IMMUNE', 'immune');
+      else this.ctx.effects.damageNumber(new THREE.Vector3(wp.x, ey + 0.6, wp.z), Math.round(base.dmg * (1 - 0.55 * d / base.r)), 'crit');
       any = true;
     }
     const bossPos = new THREE.Vector3(...ENC.bossPos);
@@ -769,6 +828,30 @@ export class WeaponSystem {
       }
     }
     this.updateWolves(dt);
+
+    // voidcaller orb: mirror the server's 0.5s gnaw ticks with predicted
+    // numbers (the orb itself renders from the voidOrb broadcast)
+    for (let i = this.voidZones.length - 1; i >= 0; i--) {
+      const z = this.voidZones[i];
+      if (now > z.until) { this.voidZones.splice(i, 1); continue; }
+      if (now < z.nextAt) continue;
+      z.nextAt = now + 0.5;
+      const O = GRENADE.voidcaller.orb;
+      const tick = Math.round(O.dps * 0.5);
+      const wp = new THREE.Vector3();
+      for (const v of this.ctx.enemies.views.values()) {
+        if (v.sh || v.ty === 'blister') continue; // the zone never gnaws blisters
+        v.group.getWorldPosition(wp);
+        const ey = v.ty === 'seeker' ? wp.y : 1;
+        if (z.pos.distanceTo(new THREE.Vector3(wp.x, ey, wp.z)) > O.r) continue;
+        this.ctx.effects.damageNumber(new THREE.Vector3(wp.x, ey + 0.6, wp.z), tick, 'normal');
+      }
+      const enc = this.ctx.getEnc();
+      if (enc && !enc.shield && !enc.bossDead
+          && z.pos.distanceTo(new THREE.Vector3(...ENC.bossPos)) < O.r + 2) {
+        this.ctx.effects.damageNumber(z.pos.clone().add(new THREE.Vector3(0, 2, 0)), tick, 'normal');
+      }
+    }
   }
 
   hudState() {

@@ -150,6 +150,7 @@
   #buffs { margin-top: 8px; font-size: 12px; letter-spacing: 2px; color: var(--void); min-height: 16px; }
   #buffs .buff { display: block; } #buffs .gold { color: var(--amber); } #buffs .well { color: var(--azure); }
   #buffs .viral { color: #86e63c; }
+  #buffs .marked { color: var(--rose); animation: pulse .6s infinite alternate; }
 
   /* bottom-right weapons */
   #weapons { position: absolute; right: 38px; bottom: 38px; text-align: right; }
@@ -241,7 +242,7 @@
 
 <div id="resumeScreen" class="screen hidden">
   <div class="title" style="font-size:30px; letter-spacing:8px;">PAUSED</div>
-  <div class="subtitle">Click to return to the fight</div>
+  <div class="subtitle" id="resumeHint">Click to return to the fight</div>
 </div>
 
 <div id="endScreen" class="screen hidden">

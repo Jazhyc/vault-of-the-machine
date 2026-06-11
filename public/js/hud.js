@@ -210,6 +210,7 @@ export class Hud {
 
       // buffs
       let buffs = '';
+      if (snap.enc.focus === myId) buffs += `<span class="buff marked">VAULTHUR'S MARK</span>`;
       if (me.gu > serverNow) buffs += `<span class="buff gold">GOLDEN VOLLEY — ${Math.max(0, me.gu - serverNow).toFixed(1)}s</span>`;
       if (me.av > 0 && me.av < ENC.capsulesNeeded) buffs += `<span class="buff viral">ANTIVIRAL ${me.av}/${ENC.capsulesNeeded}</span>`;
       if (me.av >= ENC.capsulesNeeded) buffs += `<span class="buff viral">VIRAL PURGE</span>`;

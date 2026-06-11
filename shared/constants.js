@@ -24,11 +24,11 @@ export const PLAYER = {
 
 export const CLASSES = {
   voidcaller: { name: 'Voidcaller', color: '#9d4edd', superName: 'Nova Burst',
-    desc: 'Hurl a void singularity that devastates everything near its impact.' },
+    desc: 'Hurl a void singularity that devastates everything near its impact. Grenades leave a gnawing void orb behind.' },
   gunslinger: { name: 'Gunslinger', color: '#ffb703', superName: 'Golden Volley',
-    desc: 'For 9 seconds your weapons deal 3.5x damage. Melt the boss.' },
+    desc: 'For 9 seconds your weapons deal 3.5x damage. Melt the boss. Grenades burst into four hunting embers.' },
   sentinel:   { name: 'Sentinel', color: '#4cc9f0', superName: 'Ward Aegis',
-    desc: 'Raise a healing dome. Allies inside take half damage and survive Obliteration.' },
+    desc: 'Raise a healing dome. Allies inside take half damage and survive Obliteration. Grenades split into mend-orbs that chase the wounded.' },
 };
 
 // recoil: per-shot pattern of [up, right] steps in multiples of `kick`.
@@ -77,7 +77,20 @@ export const LOADOUT = {
   secretHeavy: ['gjally'],
 };
 
-export const GRENADE = { cd: 18, dmg: 240, r: 5.5, speed: 22, fuse: 1.6 };
+// Per-class grenades (one shared cooldown/throw arc, class-colored client-side).
+// Damage budget: the gunslinger front-loads (biggest blast + four homing embers
+// at ~520 total), the voidcaller trades upfront punch for ~2x the total through
+// the lingering void orb (~1050), the sentinel deals nothing and mends instead.
+export const GRENADE = {
+  cd: 18, speed: 22, fuse: 1.6,
+  // swarm: client-side homing bolts (wolfpack machinery) hitting as `gswarm`
+  gunslinger: { dmg: 300, r: 5.5, swarm: { n: 4, dmg: 55, speed: 18 } },
+  // orb: server-side DoT zone parked at the blast, flat damage inside r
+  voidcaller: { dmg: 180, r: 5.5, orb: { dps: 145, dur: 6, r: 4.5 } },
+  // heal: server-simulated orbs chasing the two most-wounded guardians (picked
+  // at the split); they start at walking pace and accelerate — perfect tracking
+  sentinel:   { dmg: 0, r: 0, heal: { n: 2, amount: 90, speed: 8, accel: 6, life: 8 } },
+};
 export const MELEE = { dmg: 70, range: 2.8, cd: 1.2 };
 
 export const SUPER = {
@@ -90,7 +103,7 @@ export const CLASS_SUPER = { voidcaller: 'nova', gunslinger: 'golden', sentinel:
 
 // Server-side caps on a single client-reported hit, per weapon (pre-golden).
 // shotgun is per-trigger-pull (pellets aggregated client-side).
-export const DMG_CAPS = { auto: 25, sniper: 230, melee: 90, hand: 80, shotgun: 225, lmg: 52, gjally: 135 };
+export const DMG_CAPS = { auto: 25, sniper: 230, melee: 90, hand: 80, shotgun: 225, lmg: 52, gjally: 135, gswarm: 60 };
 
 export const ENEMIES = {
   husk:    { name: 'Riven Husk',   hp: 120, speed: 5.5, dmg: 22, atkRange: 2.4, atkCd: 1.5 },
@@ -129,6 +142,20 @@ export const ENC = {
     // tilted toward the arena — a flat overhead grid would have no canonical
     // "top row", making the pillar panels unreadable
     gridPos: [0, 50, -55], gridGap: 7,
+    // panel grab: while the twin ciphers are live, the boss tethers a side
+    // handle every grabCd and wrenches the whole panel around the arena's
+    // 55 m sky-ring (it keeps facing the center, so the codes stay readable).
+    // The swing is |N(grabRotMean, grabRotSd)| with a random direction — most
+    // grabs are a quarter-turn, the tails hurl it across the whole arena —
+    // and the panel STAYS where it lands until the next grab (round reset
+    // re-homes it north). The server broadcasts {at, dur, seed, a0, a1};
+    // every client replays the same seeded jerk path from server time.
+    grabCd: 10, grabCdStep: 3, grabCdMin: 4, // interval, tightening each round
+    grabDur: 3,                   // how long the tether holds before letting go
+    grabStep: 0.5,                // seconds per jerk waypoint along the arc
+    grabRotMean: Math.PI / 2, grabRotSd: 0.7,
+    grabRotMin: 0.25, grabRotMax: Math.PI, // clamp: always felt, at most a half-orbit
+    grabJitter: 0.3,              // erratic per-waypoint wobble along the arc (rad)
     // lattice strike: a matched code gathers its lit stars into a focal dot
     // that lasers the keeper — the blast breaks the ward and one-shots any
     // UNwarded enemy near it (the other twin survives only behind its ward)
@@ -165,7 +192,15 @@ export const ENC = {
                     // projectiles (volley speed 11) otherwise aim absurdly wide
   // boss specials (escalate per round; hasted & chained during damage / final stand)
   specialFirstDelay: 12, specialCd: 18, dmgSpecialFirst: 5, dmgSpecialCd: 8, finalSpecialCd: 6.5,
-  barrageDur: 6, barrageBeat: 0.55, barrageCount: 7, barrageSpeed: 11, barrageDmg: 18,
+  // barrage: spiral arms of ember rings riding chest-high — the band
+  // (barrageY ± bob) always overlaps a grounded or single-jumping hull
+  // (jump apex ~1.8 m), so you weave the gaps sideways instead of hopping
+  // the rings. The curl decays so the arms straighten and die on the wall
+  // instead of orbiting forever; the bob is beat-locked (one full sine every
+  // two beats, alternate rings half a cycle apart) so the swarm pulses in
+  // time with the spawn drum.
+  barrageDur: 6, barrageBeat: 0.55, barrageCount: 7, barrageSpeed: 8, barrageDmg: 18,
+  barrageY: 1.9, barrageBobAmp: 0.5, barrageCurl: 0.9, barrageCurlDecay: 0.22,
   sweepDur: 9, sweepWarn: 1.4, sweepDmg: 35, sweepW1: 0.85, sweepW2: -1.25,
   sweepWidth: 0.8, sweepMaxY: 1.3,
   // viral mechanic: back-mounted blisters → antiviral capsules → auric key → refuge well

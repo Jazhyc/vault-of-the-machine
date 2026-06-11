@@ -1,7 +1,7 @@
 // Headless simulation of the full encounter with a fake clock — no browser, no sockets.
 import assert from 'node:assert';
 import { Game } from '../server/game.js';
-import { ARENA, ENC, ENEMIES, PLAYER, SUPER, MAX_PLAYERS } from '../shared/constants.js';
+import { ARENA, ENC, ENEMIES, PLAYER, SUPER, MAX_PLAYERS, GRENADE, DMG_CAPS } from '../shared/constants.js';
 import { rollSigil, SIGIL_SEGMENTS, maskOf } from '../shared/sigil.js';
 
 let msgs = [];
@@ -73,8 +73,10 @@ const slay = (g, id) => { while (g.enemies.has(id)) g.onMessage('p1', { t: 'hit'
   // each guardian rallies once — including the planter — and only once
   msgs = [];
   moveTo(g, 'p2', ENC.banner.pos);
+  g.players.get('p2').sup = 30;
   g.onMessage('p2', { t: 'interact' });
   assert.ok(msgs.some(x => x.to === 'p2' && x.m.t === 'restock'), 'rallying restocks');
+  assert.equal(g.players.get('p2').sup, 100, 'rallying fills the super gauge');
   msgs = [];
   g.onMessage('p2', { t: 'interact' });
   assert.ok(!msgs.some(x => x.m.t === 'restock'), 'rally is once per guardian');
@@ -272,10 +274,12 @@ const slay = (g, id) => { while (g.enemies.has(id)) g.onMessage('p1', { t: 'hit'
   assert.equal(g.enemies.get(blisters[2].id).hp, ENEMIES.blister.hp, 'remaining blisters sealed again');
 
   // carry the key to an intact lock → its refuge well wakes
-  const key = [...g.keys.values()][0];
+  const [keyId, key] = [...g.keys.entries()][0];
   moveTo(g, 'p1', [key.p[0], 0, key.p[2]]);
   advance(g, 0.2);
   assert.ok(p1.hasKey, 'key picked up');
+  assert.ok(msgs.some(x => x.to === null && x.m.t === 'keyGet' && x.m.id === 'p1' && x.m.kid === keyId),
+    'key claim broadcast to the whole fireteam (clients clear the floor key on it)');
   moveTo(g, 'p1', [ARENA.pedestals[0].p[0], 0, ARENA.pedestals[0].p[2]]);
   advance(g, 0.2);
   assert.ok(!p1.hasKey, 'key spent on the wake');
@@ -353,6 +357,76 @@ const slay = (g, id) => { while (g.enemies.has(id)) g.onMessage('p1', { t: 'hit'
   assert.ok(twins.every(k => !k.shielded), 'both lattice strikes land');
   assert.ok(twins.every(k => g.enemies.has(k.id)), 'both keepers survive their own ward-breaks');
   ok('sigil codes accepted in either order, junk rejected');
+}
+
+// ---------- boss panel-grabs: KEEPERS-only cadence, tightening per round ----------
+{
+  const g = mkGame();
+  g.addPlayer('p1', 'Wrenched', 'gunslinger');
+  moveTo(g, 'p1', [0, 0, 1]);
+  advance(g, ENC.readyTime + 0.5);
+  god(g);
+
+  // before the keepers arrive the panel is hidden — nothing tethers it
+  msgs = [];
+  advance(g, ENC.firstKeeperDelay - 2);
+  assert.ok(!msgs.some(x => x.m.t === 'latticeGrab'), 'no grabs while the lattice sleeps');
+
+  // round 1: first grab one full grabCd after the lattice wakes, then steady
+  advance(g, 2 + 0.2);
+  assert.equal(g.enc.stage, 'KEEPERS');
+  msgs = [];
+  advance(g, ENC.sigil.grabCd + 0.5);
+  const grabs = msgs.filter(x => x.to === null && x.m.t === 'latticeGrab');
+  assert.equal(grabs.length, 1, 'one grab per grabCd at round 1');
+  assert.equal(grabs[0].m.dur, ENC.sigil.grabDur, 'grab carries its duration');
+  assert.ok(Number.isInteger(grabs[0].m.seed), 'grab carries a path seed');
+  assert.equal(grabs[0].m.a0, 0, "the round's first grab starts from the northern sky");
+  assert.equal(grabs[0].m.a1, g.enc.grabAngle, 'the panel parks at the broadcast end angle');
+  assert.ok(Math.abs(grabs[0].m.at + ENC.sigil.grabCd - g.enc.nextGrabAt) < 0.01,
+    'the next grab is scheduled a full interval out');
+
+  // the cadence tightens after every damage phase, but never past the floor
+  g.enc.round = 2;
+  assert.equal(g.grabCdNow(), ENC.sigil.grabCd - ENC.sigil.grabCdStep, 'round 2 grabs come quicker');
+  g.enc.round = 99;
+  assert.equal(g.grabCdNow(), ENC.sigil.grabCdMin, 'the interval bottoms out at grabCdMin');
+  g.enc.round = 1;
+
+  // answer both ciphers — once the stage leaves KEEPERS the grabs stop
+  const sig = g.enc.sigil;
+  sig.codes = [maskOf([0, 1]), maskOf([7, 8])];
+  for (const i of [0, 1]) g.onMessage('p1', { t: 'sigil', i });
+  for (const i of [7, 8]) g.onMessage('p1', { t: 'sigil', i });
+  assert.equal(g.enc.stage, 'HUNT');
+  msgs = [];
+  advance(g, ENC.sigil.grabCd * 2 + 1);
+  assert.ok(!msgs.some(x => x.m.t === 'latticeGrab'), 'a spent lattice is left alone');
+
+  // sampled swings: continuous (each grab starts where the last parked),
+  // clamped, and centered near the quarter-turn mean
+  msgs = [];
+  let prev = g.enc.grabAngle, sum = 0;
+  for (let i = 0; i < 500; i++) {
+    g.fireGrab();
+    const m = msgs[msgs.length - 1].m;
+    assert.equal(m.t, 'latticeGrab');
+    assert.equal(m.a0, prev, 'each grab starts where the last one parked');
+    const swing = Math.abs(m.a1 - m.a0);
+    assert.ok(swing >= ENC.sigil.grabRotMin - 1e-3 && swing <= ENC.sigil.grabRotMax + 1e-3,
+      'swings stay inside the clamp');
+    sum += swing; prev = m.a1;
+  }
+  const meanSwing = sum / 500;
+  assert.ok(meanSwing > 1.25 && meanSwing < 1.9,
+    `swing distribution centers near π/2 (got ${meanSwing.toFixed(2)})`);
+
+  // a fresh round's keepers re-home the panel to the northern sky
+  g.enterMech(2);
+  advance(g, ENC.firstKeeperDelay + 1);
+  assert.equal(g.enc.stage, 'KEEPERS');
+  assert.equal(g.enc.grabAngle, 0, 'round reset re-homes the panel');
+  ok('panel grabs: KEEPERS-only cadence, per-round tightening, N(π/2) arena swings');
 }
 
 // ---------- annihilation wipe ----------
@@ -720,7 +794,25 @@ const slay = (g, id) => { while (g.enemies.has(id)) g.onMessage('p1', { t: 'hit'
   advance(g, 1.2);
   assert.ok(g.enc.barrageUntil > g.t, 'barrage running');
   assert.ok(g.projs.size >= ENC.barrageCount, 'bullet-hell rings in flight');
-  ok('rhythmic barrage fires rotating rings');
+  const hell = [...g.projs.entries()].filter(([, pr]) => pr.k === 'hell');
+  assert.ok(hell.length >= ENC.barrageCount, 'hell rings in flight');
+  for (const [, pr] of hell) {
+    // chest-high bob band: always overlaps a grounded hull, a jump can't clear it
+    assert.ok(pr.p[1] > ENC.barrageY - ENC.barrageBobAmp - 0.2 &&
+      pr.p[1] < ENC.barrageY + ENC.barrageBobAmp + 0.2, 'ring rides the chest-high bob band');
+  }
+  // spiral: the heading curls over time instead of flying straight
+  const [sampleId, sample] = hell[0];
+  const h0 = Math.atan2(sample.v[2], sample.v[0]);
+  advance(g, 1.0);
+  const later = g.projs.get(sampleId);
+  assert.ok(later, 'sampled ring still alive');
+  let dh = Math.atan2(later.v[2], later.v[0]) - h0;
+  while (dh > Math.PI) dh -= 2 * Math.PI;
+  while (dh < -Math.PI) dh += 2 * Math.PI;
+  assert.ok(Math.abs(dh) > 0.4, 'ring heading curls into a spiral');
+  assert.equal(Math.sign(dh), g.enc.barrageDir, 'curl follows the barrage spin direction');
+  ok('rhythmic barrage fires spiraling, bobbing, unjumpable rings');
 }
 
 // ---------- gjallarhorn: per-player unlock, loot, 30s victory reset, caps ----------
@@ -859,6 +951,40 @@ const slay = (g, id) => { while (g.enemies.has(id)) g.onMessage('p1', { t: 'hit'
   ok('homing seekers: launch, hunt, shoot-down, chain reaction, terrain block, phase escalation');
 }
 
+// ---------- damage-phase seekers converge on the marked player ----------
+{
+  const g = mkGame();
+  g.addPlayer('p1', 'A', 'gunslinger');
+  g.addPlayer('p2', 'B', 'voidcaller');
+  g.addPlayer('p3', 'C', 'sentinel');
+  for (let i = 1; i <= 3; i++) moveTo(g, 'p' + i, [i * 0.5, 0, 1]);
+  advance(g, ENC.readyTime + 0.5);
+  god(g);
+  const seekers = () => [...g.enemies.values()].filter(e => e.type === 'seeker');
+
+  // while the boss is enraged the whole salvo hunts its mark, like the volleys
+  g.enterDamage();
+  const mark = g.enc.focus;
+  assert.ok(mark, 'damage opens with a marked player');
+  advance(g, ENC.seekerFirst + 0.2);
+  assert.ok(seekers().length > 0, 'damage salvo launched');
+  assert.ok(seekers().every(s => s.target === mark), 'damage: every missile hunts the mark');
+
+  // a stale mark id falls back to the random spread, never a dead reference
+  g.clearAdds();
+  g.enc.focus = 'ghost';
+  g.launchSeekers();
+  assert.ok(seekers().length > 0 && seekers().every(s => g.players.has(s.target)), 'a vanished mark falls back to live prey');
+
+  // outside DAMAGE the salvo spreads across the fireteam even if a mark lingers
+  g.enterMech(2);
+  g.enc.focus = mark;
+  const picked = new Set();
+  for (let i = 0; i < 6; i++) { g.clearAdds(); g.launchSeekers(); for (const s of seekers()) picked.add(s.target); }
+  assert.ok(picked.size > 1, 'mech: the salvo spreads across the fireteam again');
+  ok('seekers: damage-phase salvo converges on the mark, spreads otherwise');
+}
+
 // ---------- end-of-encounter scoreboard ----------
 {
   const g = mkGame();
@@ -907,6 +1033,83 @@ const slay = (g, id) => { while (g.enemies.has(id)) g.onMessage('p1', { t: 'hit'
   const wiped = msgs.findLast(x => x.m.t === 'wipe').m;
   assert.equal(wiped.stats.length, 2, 'the wipe message carries the scoreboard');
   ok('end-of-encounter scoreboard: credit, caps, sort, reset');
+}
+
+// ---------- per-class grenades ----------
+{
+  // balance contract: the gunslinger front-loads, the voidcaller doubles the total
+  const gsTotal = GRENADE.gunslinger.dmg + GRENADE.gunslinger.swarm.n * GRENADE.gunslinger.swarm.dmg;
+  const vcTotal = GRENADE.voidcaller.dmg + GRENADE.voidcaller.orb.dps * GRENADE.voidcaller.orb.dur;
+  assert.ok(GRENADE.gunslinger.dmg > GRENADE.voidcaller.dmg, 'gunslinger hits harder upfront');
+  assert.ok(vcTotal > gsTotal * 1.8 && vcTotal < gsTotal * 2.2,
+    `voidcaller total ≈ 2x gunslinger total (${vcTotal} vs ${gsTotal})`);
+  assert.equal(GRENADE.sentinel.dmg, 0, 'the sentinel grenade harms nobody');
+  assert.ok(GRENADE.sentinel.heal.speed >= PLAYER.walk - 0.5 && GRENADE.sentinel.heal.speed <= PLAYER.walk + 0.5,
+    'mend-orbs start at roughly walking pace');
+
+  const g = mkGame();
+  g.addPlayer('p1', 'Slinger', 'gunslinger');
+  g.addPlayer('p2', 'Voider', 'voidcaller');
+  g.addPlayer('p3', 'Medic', 'sentinel');
+  for (let i = 1; i <= 3; i++) moveTo(g, 'p' + i, [i * 0.5, 0, 1]);
+  advance(g, ENC.readyTime + 0.5);
+  assert.equal(g.enc.st, 'MECH');
+  // quiet the arena so nothing else touches the damage/heal math
+  const hush = () => Object.assign(g.enc, {
+    nextWaveAt: g.t + 999, nextKeeperAt: g.t + 999, nextVolleyAt: g.t + 999,
+    nextSeekerAt: g.t + 999, nextSlamAt: g.t + 999, nextSpecialAt: g.t + 999,
+  });
+  hush(); g.clearAdds();
+
+  // gunslinger: the blast carries the per-class numbers (point-blank = full dmg)
+  const k1 = g.spawnEnemy('keeper', [20, 0, 5]);
+  g.onMessage('p1', { t: 'explode', kind: 'grenade', p: [k1.pos[0], 1, k1.pos[2]] });
+  assert.equal(k1.maxHp - k1.hp, GRENADE.gunslinger.dmg, 'gunslinger blast lands its full damage point-blank');
+  assert.equal(g.dots.size, 0, 'no void orb from a gunslinger');
+
+  // swarm embers are ordinary client hits — capped server-side
+  const hpb = k1.hp;
+  g.onMessage('p1', { t: 'hit', target: k1.id, dmg: 99999, weapon: 'gswarm' });
+  assert.ok(hpb - k1.hp <= DMG_CAPS.gswarm, 'swarm ember damage capped');
+
+  // voidcaller: smaller blast + a parked orb that gnaws for the full duration
+  const k2 = g.spawnEnemy('keeper', [-20, 0, 5]); // 10 < dist-to-players < 26: it stands its ground
+  g.onMessage('p2', { t: 'explode', kind: 'grenade', p: [k2.pos[0], 1, k2.pos[2]] });
+  assert.equal(k2.maxHp - k2.hp, GRENADE.voidcaller.dmg, 'voidcaller blast lands its (smaller) damage');
+  assert.equal(g.dots.size, 1, 'the blast parks a void orb');
+  assert.ok(msgs.some(x => x.to === null && x.m.t === 'voidOrb'), 'orb announced for the client FX');
+  hush();
+  advance(g, GRENADE.voidcaller.orb.dur + 0.6);
+  const gnawed = k2.maxHp - k2.hp - GRENADE.voidcaller.dmg;
+  const expected = GRENADE.voidcaller.orb.dps * GRENADE.voidcaller.orb.dur;
+  assert.ok(gnawed >= expected - GRENADE.voidcaller.orb.dps * 0.6 && gnawed <= expected + 1,
+    `the orb gnaws ≈ dps×dur in total (got ${gnawed})`);
+  assert.equal(g.dots.size, 0, 'the orb burns out');
+
+  // sentinel: the burst splits into mend-orbs hunting the two most wounded
+  hush(); g.clearAdds(); g.projs.clear(); // no stray bolts during the heal window
+  const p1 = g.players.get('p1'), p2 = g.players.get('p2'), p3 = g.players.get('p3');
+  p1.hp = 40; p2.hp = 120; p3.hp = 200;
+  p1.lastDmg = p2.lastDmg = p3.lastDmg = g.t; // hold regen out of the heal math
+  msgs = [];
+  g.onMessage('p3', { t: 'explode', kind: 'grenade', p: [0, 1, 20] });
+  assert.equal(p1.hp, 40, 'the burst itself heals and harms nobody');
+  const orbs = [...g.projs.values()].filter(pr => pr.k === 'heal');
+  assert.equal(orbs.length, GRENADE.sentinel.heal.n, 'the burst splits into two mend-orbs');
+  assert.deepEqual(orbs.map(o => o.tgt).sort(), ['p1', 'p2'], 'they hunt the two most wounded, picked at the split');
+  advance(g, 4); // ~19 m at walking pace + acceleration — they catch up well inside this
+  const bursts = msgs.filter(x => x.m.t === 'healBurst');
+  assert.equal(bursts.length, 2, 'both deliveries announced');
+  assert.deepEqual(bursts.map(x => x.m.id).sort(), ['p1', 'p2']);
+  assert.equal(p1.hp, 40 + GRENADE.sentinel.heal.amount, 'the most wounded guardian was mended');
+  assert.equal(p2.hp, PLAYER.maxHp, 'healing clamps at full health');
+  assert.equal([...g.projs.values()].filter(pr => pr.k === 'heal').length, 0, 'orbs spent on delivery');
+
+  // the explode rate-limit covers the payloads too
+  g.onMessage('p3', { t: 'explode', kind: 'grenade', p: [0, 1, 20] });
+  assert.equal([...g.projs.values()].filter(pr => pr.k === 'heal').length, 0,
+    'a second grenade inside the rate window spawns nothing');
+  ok('per-class grenades: gunslinger burst + capped swarm, voidcaller ≈2x via orb, sentinel mend-orbs');
 }
 
 console.log('\nAll encounter tests passed.');

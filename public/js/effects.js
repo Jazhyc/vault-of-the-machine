@@ -53,6 +53,19 @@ export class Effects {
     });
     this.tracerIdx = 0;
 
+    // Voidcaller grenade orbs: a lingering void sphere per orb. Tiny pool (one
+    // per voidcaller every ~18s, 6s life); material cloned per slot because the
+    // opacity animates. No lights — the standing light-count rule applies.
+    this.voids = Array.from({ length: 4 }, () => {
+      const mesh = noRay(new THREE.Mesh(new THREE.SphereGeometry(1, 18, 14),
+        new THREE.MeshBasicMaterial({ color: 0x9d4edd, transparent: true, opacity: 0.3, depthWrite: false })));
+      mesh.visible = false;
+      mesh.frustumCulled = false;
+      scene.add(mesh);
+      return { mesh, life: 0, dur: 1, r: 1 };
+    });
+    this.voidIdx = 0;
+
     this.sparks = Array.from({ length: 16 }, () => {
       const m = noRay(new THREE.Mesh(new THREE.SphereGeometry(0.07, 6, 6),
         new THREE.MeshBasicMaterial({ color: 0xffd27a })));
@@ -70,7 +83,8 @@ export class Effects {
   paintNumber(n, text, kind) {
     const g = n.c.getContext('2d');
     g.clearRect(0, 0, 192, 80);
-    const color = kind === 'crit' ? '#ffd23d' : kind === 'super' ? '#c77dff' : kind === 'immune' ? '#cdd7ff' : '#ffffff';
+    const color = kind === 'crit' ? '#ffd23d' : kind === 'super' ? '#c77dff' : kind === 'immune' ? '#cdd7ff'
+      : kind === 'heal' ? '#7dffcf' : '#ffffff';
     const size = kind === 'crit' || kind === 'super' ? 46 : 36;
     g.font = `700 ${size}px "Segoe UI", Arial`;
     g.textAlign = 'center'; g.textBaseline = 'middle';
@@ -111,7 +125,7 @@ export class Effects {
     // Cycle the FULL glyph set through both font sizes: glyph rasters cache per
     // glyph+size, so warming only "888" left the first real kill to rasterize
     // nine fresh digits (stroke + fill) — a one-time first-kill hitch.
-    const texts = ['0123', '4567', '89', 'IMMUNE'];
+    const texts = ['0123', '4567', '89+', 'IMMUNE']; // '+' = heal numbers
     this.numbers.forEach((n, i) => {
       this.paintNumber(n, texts[i % texts.length], i % 2 ? 'crit' : 'normal');
       n.spr.visible = true;
@@ -121,25 +135,38 @@ export class Effects {
     for (const b of this.booms) { b.mesh.visible = true; b.life = 0.0001; b.max = 1; b.r = 1; b.lit = false; }
     for (const t of this.tracers) { t.line.visible = true; t.life = 0.0001; }
     for (const s of this.sparks) { s.mesh.visible = true; s.life = 0.0001; }
+    for (const v of this.voids) { v.mesh.visible = true; v.life = 0.0001; v.dur = 1; v.r = 1; }
   }
 
-  explosion(pos, kind = 'rocket') {
+  // colorOverride lets class-flavored booms (grenades, swarm embers) reuse the
+  // pool without minting new kinds per class.
+  explosion(pos, kind = 'rocket', colorOverride = null) {
     const b = this.booms[this.boomIdx++ % this.booms.length];
     const big = kind === 'nova';
-    const col = kind === 'nova' ? 0x9d4edd : kind === 'grenade' ? 0x7ae582 : kind === 'death' ? 0xc77dff : kind === 'seeker' ? 0xff7733 : 0xffaa33;
+    const col = colorOverride ?? (kind === 'nova' ? 0x9d4edd : kind === 'grenade' ? 0x7ae582
+      : kind === 'death' ? 0xc77dff : kind === 'seeker' ? 0xff7733 : kind === 'heal' ? 0x7dffcf : 0xffaa33);
     b.mesh.material.color.set(col);
     b.light.color.set(col);
     b.light.position.copy(pos); // the light is scene-level, not a mesh child
     b.mesh.position.copy(pos);
-    b.r = big ? 9 : kind === 'grenade' ? 5 : kind === 'death' ? 2.5 : kind === 'seeker' ? 3.5 : 6.5;
+    b.r = big ? 9 : kind === 'grenade' ? 5 : kind === 'death' ? 2.5 : kind === 'seeker' ? 3.5 : kind === 'heal' ? 2.2 : 6.5;
     b.max = big ? 0.7 : 0.4;
     b.life = b.max;
     b.mesh.visible = true;
     // Death pops are flash-only: an AoE multikill would otherwise drive all six
     // pooled point lights at once — the light COUNT stays constant, but the
     // per-fragment lighting cost across the screen spikes for half a second.
-    b.lit = kind !== 'death';
-    this.shake(big ? 0.5 : kind === 'death' ? 0.08 : 0.25);
+    // Heal pops stay unlit too (two mend-orbs land near-simultaneously).
+    b.lit = kind !== 'death' && kind !== 'heal';
+    this.shake(big ? 0.5 : kind === 'death' || kind === 'heal' ? 0.08 : 0.25);
+  }
+
+  // A voidcaller grenade orb parks at the blast for `dur` seconds.
+  voidOrb(pos, r, dur) {
+    const v = this.voids[this.voidIdx++ % this.voids.length];
+    v.mesh.position.copy(pos);
+    v.r = r; v.dur = dur; v.life = dur;
+    v.mesh.visible = true;
   }
 
   tracer(from, to) {
@@ -198,6 +225,15 @@ export class Effects {
       if (s.life <= 0) continue;
       s.life -= dt;
       if (s.life <= 0) s.mesh.visible = false;
+    }
+    for (const v of this.voids) {
+      if (v.life <= 0) continue;
+      v.life -= dt;
+      const t = v.dur - v.life;
+      const fade = Math.min(1, v.life / 0.5) * Math.min(1, t / 0.25); // ease in, ease out
+      v.mesh.scale.setScalar(v.r * (0.92 + 0.08 * Math.sin(t * 7)));
+      v.mesh.material.opacity = 0.32 * fade;
+      if (v.life <= 0) v.mesh.visible = false;
     }
   }
 }

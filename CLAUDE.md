@@ -51,11 +51,28 @@ damage path needs a cap or validation server-side, and ideally a test like the e
 from full inside `start` m linearly down to `min`× at `range`; its `DMG_CAPS` entry covers the
 point-blank maximum.
 
+Grenades are per-class (`GRENADE` in shared/constants.js: shared `cd/speed/fuse`, per-class blast
+numbers; class-colored client-side — projectile, boom, and the remote `pf`/`explosion` renders
+look the thrower's class up in the snapshot). The server resolves `explode {kind:'grenade'}` dmg/r
+from `p.cls`. Payloads: **gunslinger** — biggest blast, then four client-side homing embers reuse
+the wolfpack machinery (`spawnSwarm` in weapons.js targets the nearest damageable enemies, boss as
+backstop) and land as ordinary `hit`s with weapon `gswarm` (capped in `DMG_CAPS`). **voidcaller**
+— smaller blast plus a server-side DoT zone (`game.dots`, 0.5 s flat-damage ticks inside `orb.r`
+for `orb.dur`; total ≈ 2× the gunslinger's total, asserted in tests); broadcast `voidOrb
+{p, r, dur}` drives the pooled client orb FX, and the thrower's client mirrors the ticks as
+predicted damage numbers. **sentinel** — zero damage; the burst splits into two server-simulated
+mend-orbs (snapshot `projs` kind `heal`) that perfect-track the two lowest-HP guardians (picked at
+the split), starting at walk speed and accelerating; contact heals `heal.amount` (clamped) and
+broadcasts `healBurst {id, p, amt}` (cyan pop + `+hp` number; pickup chime if it's you).
+`tickProjectiles`/`tickDots` now run in every state — mend-orbs must fly even in LOBBY.
+
 Protocol: JSON over one ws connection. Snapshots broadcast at 10 Hz (`broadcastSnapshot`); clients
 interpolate remote entities ~130 ms behind arrival time (`Interp` in `enemies.js`). One-shot events
-(`pf` fire relay, `explosion`, `super`, `sweep`, `bossFocus`, `capsule`, `keyGet`, `wellWake`,
-`sigilNode`, `sigilMatch`, `sigilBlast`, `heraldRise`, `wardBuff` (private), `wardBlast`,
-`wormhole`, `missile`, `seekers`, `seekerBoom`, `banner`, `restock` (private), …) are separate
+(`pf` fire relay, `explosion`, `super`, `sweep`, `bossFocus`, `capsule`, `keyGet` (broadcast
+`{id, kid}` — every client clears the floor key instantly; chime/tip only when `id` is you), `wellWake`,
+`sigilNode`, `sigilMatch`, `sigilBlast`, `latticeGrab` (`{at, dur, seed, a0, a1}` — clients replay
+the same seeded panel-drag arc from server time), `heraldRise`, `wardBuff` (private), `wardBlast`,
+`wormhole`, `missile`, `seekers`, `seekerBoom`, `voidOrb`, `healBurst`, `banner`, `restock` (private), …) are separate
 messages; a broadcast with `exclude: playerId` skips the sender (stripped in `server/main.js`).
 Client→server: `state`, `fire`, `hit`, `explode`, `superCast`, `interact`, `loadout`, and
 `sigil {i}` (toggle sky-lattice node i; validated st/stage/index server-side). Snapshot player
@@ -64,7 +81,8 @@ fields are abbreviated: `p` pos, `dn` downed, `dd` dead, `gu` goldenUntil, `av` 
 player id (DAMAGE only) and `enc.bossYaw` is the server-owned boss facing (clients lerp to it —
 every client must see the same back side); `enc.stage` is the MECH sub-stage, `enc.wh/mAt` the
 wormhole flag and missile-impact time, and `enc.sig` the round's sigil layout (`c` colors, `o`
-pillar owners, `s` pillar segments, `g` 9-bit lattice mask, `m` matched flags). `enc.sweep`
+pillar owners, `s` pillar segments, `g` 9-bit lattice mask, `m` matched flags, `ga` the panel's
+resting sky-ring angle). `enc.sweep`
 carries `a1/a2/w1/w2/on` — the constant angular velocities let the client extrapolate the beam
 angles per frame from snapshot-arrival time (`encAt`), so the beams glide instead of stepping
 at 10 Hz. Keeper enemies
@@ -80,9 +98,12 @@ keepers}`, sorted by boss damage server-side — rendered as the `#endStats` tab
 `applyBossDamage` credits only damage that actually lands (nothing while shielded, no overkill
 past 0), and `startEncounter` resets the board for everyone.
 
-Player-facing text (toasts/announcements) is flavor-first by explicit user preference: hint
-through fiction ("the blisters quiver"), never bare instructions ("shoot the blisters"). Status
-readouts (lock names, code counts, timers) stay.
+Player-facing text (toasts/announcements) is flavor-first AND terse, by explicit user
+preference: hint through fiction ("the blisters quiver"), never bare instructions ("shoot the
+blisters"), and keep each message to ~2–4 words (names/colors/numbers don't count). Never fire
+a server toast and a client announce for the same event — events with a client-side announce
+(bossWake, bossFocus, sweep, barrage, sigilMatch, heraldRise, wormhole, bossDied, state
+changes) get no server toast. Status readouts (lock names, code counts, timers) stay.
 
 ### Encounter state machine (server)
 
@@ -90,8 +111,9 @@ readouts (lock names, code counts, timers) stay.
 notched on the boss bar) → VICTORY | WIPE`. LOBBY has the **rally banner** (`ENC.banner`): the
 white circle near spawn (always-in-scene ring in `EntityManager`, visible only while LOBBY runs
 bannerless) takes an `interact` to plant `game.banner`, then each guardian's `interact` within
-`restockR` earns ONE private `restock` (`p.restocked`, re-armed in `resetToLobby`) — the actual
-refill is client-side (`WeaponSystem.restock()`: full mags, reserves to `maxReserves`,
+`restockR` earns ONE private `restock` (`p.restocked`, re-armed in `resetToLobby`) — the server
+fills the super gauge (`gainSuper(p, 100)`; `sup` is server-owned) and the rest of the refill is
+client-side (`WeaponSystem.restock()`: full mags, reserves to `maxReserves`,
 grenade/melee cooldowns cleared; `bannerRallied` in `main.js` gates the prompt). Everything is
 LOBBY-gated server-side; the banner object itself dies with `resetWorld`. MECH runs the
 **sky-sigil mechanic** through
@@ -108,7 +130,19 @@ blast, which also deals `strikeDmg` to every UNwarded enemy within `strikeR` of 
 — its ward soaked the blast). `sigilMatch` carries `code`+`kid` so the client can run the
 matching FX (stars beam into a focal dot in front of the lattice, the dot lasers the keeper,
 `sigilBlast` lands as the boom — same `strikeDelay` clock on both ends). The codes are
-guaranteed distinct and match order-free. Both twins dead → the warded herald (`e.sky`, hovers at
+guaranteed distinct and match order-free. While the ciphers are live (stage `KEEPERS` only) the
+boss **grabs the panel**: every `sigil.grabCd` (10 s, −`grabCdStep` per round, floor `grabCdMin`)
+`fireGrab` rolls a swing of |N(`grabRotMean` π/2, `grabRotSd`)| rad (clamped
+`grabRotMin..grabRotMax`, random direction — the tails hurl it across the whole arena), tracks the
+resting spot in `enc.grabAngle` (reset north in `spawnKeepers`; snapshot `sig.ga` re-syncs
+late/lossy clients), and broadcasts `latticeGrab {at, dur, seed, a0, a1}`. A tether beam drags the
+lattice along the arena's 55 m sky-ring while it jerks between seeded waypoints (`grabHash` every
+`grabStep`, ±`grabJitter` wobble) — the panel always `lookAt`s the arena so codes stay readable,
+and it RESTS where it lands. Position is cosmetic to the server (clients report node indices), so
+each client replays the identical arc off server time in `world.update`; the strike-rig focal dot
+is computed per match from the panel's current spot (`rig.focus`). The lattice itself got a
+backing plate, border, and side handles (`sigil.handles`, the tether anchor) in
+`buildSigilLattice`; none of them are raycast targets. Both twins dead → the warded herald (`e.sky`, hovers at
 `ENC.sigil.finalPos`) rises above the boss. Its ward is a destructible shield (`e.shieldHp`,
 deliberately weak: `sigil.shieldHp + shieldPerPlayer×(n−1)`) that only wardbreaker-blessed fire
 can wound: standing within `ENC.sigil.pedestalR` of *its* color's pedestal grants `p.wardUntil`
@@ -136,7 +170,9 @@ given the 1.8 m combined hit radius). Volley cadence tightens per phase
 **Seekers** (back-launched homing missiles) are the boss's other basic attack, active from round
 1: every `seekerCd` during MECH/DAMAGE/FINAL, `launchSeekers` fans a salvo off the boss's back
 (`seekerBase` 2, +1 per phase entry via `enc.seekerBonus` — bumped in `enterMech` round>1,
-`enterDamage`, `enterFinal`; reset only by `resetWorld`). They are ENEMIES (`type: 'seeker'`, hp
+`enterDamage`, `enterFinal`; reset only by `resetWorld`). Each missile picks a random living
+player, except during DAMAGE where the whole salvo hunts `enc.focus` (same focus-or-random
+fallback as the volleys). They are ENEMIES (`type: 'seeker'`, hp
 90) so the whole shoot-down path is free: client raycast hits, `DMG_CAPS`, damage numbers, crit
 warhead nose — but deliberately NO hp bar (bars are keeper-only; it reads as ordnance). Each
 missile climbs a `seekerPop` launch arc, then `tickSeeker` homes on its assigned player's chest
@@ -172,7 +208,16 @@ woken well into `enc.burned` permanently (the client drops that pedestal's cryst
 FINAL chains specials ×1.5 on `finalSpecialCd` and lets them overlap (sweep + barrage + volleys
 at once). Escalation is round-driven: round ≥2 keepers spawn orbiting Wisps and the boss gains
 the rhythmic barrage; round ≥3 adds the sweep-laser arena partition (spawning pauses while
-`enc.sweep` is set during MECH).
+`enc.sweep` is set during MECH). Barrage rings spiral: each ring's heading curls at `pr.w`
+(`barrageCurl`, decaying via `barrageCurlDecay` so the arm straightens and dies on the wall;
+spin direction `enc.barrageDir` re-rolled per cast) and rides a beat-locked vertical sine
+around `barrageY` (`bobF/bobPh/bobT0` on the proj — one full cycle per two beats, alternate
+rings antiphase). The 1.4–2.4 m band deliberately overlaps both a grounded and a single-jumping
+hull (apex ~1.8 m) — you dodge sideways through the gaps, not by jumping. `tickProjectiles`
+pins the exact sine into `p[1]` and its derivative into `v[1]` each tick so the client's linear
+`p + v·age` extrapolation tracks it between snapshots. The client `hell` style is an orange
+core in a spinning additive wire cage (`buildProjMesh` in entities.js, warmed at boot with the
+other shared proj assets).
 Phase-entry methods (`enterDamage`, `enterOblit`, `enterFinal`, `victory`, `startWipe`) must clear
 `sweep`/`barrageUntil` — bugs here leak boss specials across phases. The same applies to the viral
 mechanic: `endViralPhase()` clears focus/capsules/stacks (and keys, unless called from
@@ -183,7 +228,12 @@ the name to `game.gjallyOwners` (persisted as `{gjallyNames}` in `.unlocks.json`
 `game.onUnlock(name)`); victory alone unlocks nothing. After 30 s the encounter resets with
 `{t:'reset', reason:'victory'}`, sending clients back to the selection screen (same ws connection;
 class re-pick goes through the `loadout` message, weapons are purely client-side via
-`WeaponSystem.setLoadout`). The Gjallarhorn must stay invisible in the UI unless that name owns it
+`WeaponSystem.setLoadout`). The same selection screen is reachable mid-LOBBY: ESC from the pause
+overlay calls `showLoadoutScreen(false)` (the first ESC only releases pointer lock — the browser
+eats it), and the joined `deployBtn` branch redeploys on the same connection. The snap handler's
+phase-transition block yanks a lingering selection screen back to the pause overlay if the
+fireteam plate-starts the raid (the open screen freezes `state` reports, so a player who escaped
+while standing on the plate still counts as ready). The Gjallarhorn must stay invisible in the UI unless that name owns it
 (lobby learns it from `/api/unlocks?name=`, the private `unlock` event, or the `welcome` message's
 `gj` flag — there is no global snapshot flag).
 
@@ -216,9 +266,11 @@ Standing rules derived from the above:
   recompiles (~200 ms per new light-count, then masked by the driver's shader cache — which is
   why it presents as a "first time only" hitch; profiler signature: all `render`, zero JS).
   All dynamic lights therefore live DIRECTLY in the scene, always visible, intensity 0 when
-  idle: explosion lights (effects pool), the boss light (enemies.js), and the golden-glow pool
-  (`glowPool` in main.js, sized MAX_PLAYERS, created before the warm frame). Never attach a
-  light to a transient or toggled object.
+  idle: explosion lights (effects pool), the boss light (enemies.js), and the status-glow pool
+  (`glowPool` in main.js, sized MAX_PLAYERS, created before the warm frame; EntityManager
+  reserves one for the local player's own glow, the rest serve remotes — priority red boss-mark
+  > golden > yellow auric key > green full antiviral, plus a scene-level `focusRing` mesh pinned
+  under the marked player). Never attach a light to a transient or toggled object.
 - **Never allocate geometries/materials per spawned instance.** Everything that churns draws
   from module-level shared singletons (`GEO`/`MAT` in `enemies.js`, the constants atop
   `entities.js`, `PROJ_GEO`/`WOLF_GEO` in `weapons.js`, `G_GEO` for guardians). Clone a shared

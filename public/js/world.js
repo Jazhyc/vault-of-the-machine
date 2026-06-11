@@ -9,6 +9,16 @@ const PILLAR_DEFAULT = new THREE.Color(0x8a5fff);
 const SCRAMBLE_CSS = 'rgba(150,200,255,0.9)'; // idle holograms drift in neutral blue
 const UP = new THREE.Vector3(0, 1, 0);
 const V3 = new THREE.Vector3(); // scratch — never allocate in the render loop
+const V3B = new THREE.Vector3();
+
+// Deterministic per-(seed, waypoint) hash → [0, 1). Every client must derive
+// the SAME panel-grab jerk path from just the broadcast seed — no Math.random.
+const grabHash = (seed, j) => {
+  let h = (seed + Math.imul(j, 0x9e3779b9)) | 0;
+  h = Math.imul(h ^ (h >>> 16), 0x45d9f3b);
+  h = Math.imul(h ^ (h >>> 16), 0x45d9f3b);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+};
 
 export function buildWorld(scene, targets) {
   const world = new THREE.Group();
@@ -235,8 +245,25 @@ export function buildWorld(scene, targets) {
       depthWrite: false, fog: false });
     const laser = noRay(new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.28, 1, 8, 1, true), laserMat));
     for (const o of [beams, dot, laser]) { o.frustumCulled = false; world.add(o); }
-    return { beams, beamMat, dot, dotMat, laser, laserMat, active: false, target: new THREE.Vector3() };
+    return { beams, beamMat, dot, dotMat, laser, laserMat, active: false,
+      // per-rig focal point: the panel can have been dragged anywhere on the
+      // sky-ring, so the dot gathers in front of wherever it sits at match time
+      focus: strikeFocus.clone(), target: new THREE.Vector3() };
   });
+
+  // boss panel-grab tether: ONE persistent beam from the Watcher to a lattice
+  // handle while a grab runs. Built visible so the warm frame uploads it; the
+  // first update() hides it.
+  const grabMat = new THREE.MeshBasicMaterial({ color: 0xff5a4d, transparent: true, opacity: 0.8,
+    depthWrite: false, fog: false });
+  const grabBeam = noRay(new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 1, 8, 1, true), grabMat));
+  grabBeam.frustumCulled = false;
+  world.add(grabBeam);
+  let grab = null;    // live grab event { at, dur, seed, a0, a1 } — replayed off server time
+  let grabTheta = 0;  // panel's current sky-ring offset (rad, 0 = north)
+  // the lattice rides a fixed ring around the arena: radius + base azimuth of gridPos
+  const GRID_R = Math.hypot(ENC.sigil.gridPos[0], ENC.sigil.gridPos[2]);
+  const GRID_AZ = Math.atan2(ENC.sigil.gridPos[0], ENC.sigil.gridPos[2]);
 
   // stars
   const starGeo = new THREE.BufferGeometry();
@@ -271,6 +298,11 @@ export function buildWorld(scene, targets) {
       rig.t0 = t;
       rig.getTarget = getTarget;
       rig.target.set(0, 3, 0);
+      // gather a step out of the panel's CURRENT plane, toward the arena
+      rig.focus.copy(sigil.group.position);
+      V3.set(0, 6, 0).sub(rig.focus).normalize();
+      rig.focus.addScaledVector(V3, 8);
+      rig.dot.position.copy(rig.focus);
       const col = PED_COLS[colorIdx] || PILLAR_DEFAULT;
       rig.beamMat.color.copy(col);
       rig.dotMat.color.copy(col);
@@ -282,15 +314,17 @@ export function buildWorld(scene, targets) {
         V3.copy(sigil.nodes[i].mesh.position);
         sigil.group.localToWorld(V3);
         pos.setXYZ(n * 2, V3.x, V3.y, V3.z);
-        pos.setXYZ(n * 2 + 1, strikeFocus.x, strikeFocus.y, strikeFocus.z);
+        pos.setXYZ(n * 2 + 1, rig.focus.x, rig.focus.y, rig.focus.z);
         n++;
       }
       for (; n < 9; n++) { // collapse unused segments — they draw nothing
-        pos.setXYZ(n * 2, strikeFocus.x, strikeFocus.y, strikeFocus.z);
-        pos.setXYZ(n * 2 + 1, strikeFocus.x, strikeFocus.y, strikeFocus.z);
+        pos.setXYZ(n * 2, rig.focus.x, rig.focus.y, rig.focus.z);
+        pos.setXYZ(n * 2 + 1, rig.focus.x, rig.focus.y, rig.focus.z);
       }
       pos.needsUpdate = true;
     },
+    // The boss tethers the panel: stash the event, update() replays the path.
+    latticeGrab(m) { grab = m; },
     update(dt, enc, serverNow) {
       t += dt;
       const sig = enc ? enc.sig : null;
@@ -313,6 +347,49 @@ export function buildWorld(scene, targets) {
           }
           n.mesh.scale.setScalar(on ? 1 + Math.sin(t * 6 + i) * 0.12 : 1);
         }
+      }
+
+      // --- boss panel-grab: the tether seizes a handle and drags the whole
+      // lattice around the arena's sky-ring, jerking along the arc — and the
+      // panel RESTS where it lands (snapshot sig.ga). Driven by server time so
+      // every guardian watches the same motion; node raycasts ride along free
+      // (hits are world-matrix based, and only the index is reported anyway).
+      let grabbing = false;
+      if (!gridActive) grab = null;
+      if (grab && serverNow != null) {
+        const age = serverNow - grab.at;
+        if (age >= 0 && age <= grab.dur) {
+          grabbing = true;
+          // waypoints march from a0 to a1 with seeded wobble; each step lunges
+          // in its first quarter, then dwells — abrupt, pure fn of (seed, age)
+          const step = ENC.sigil.grabStep, jit = ENC.sigil.grabJitter;
+          const N = Math.max(1, Math.ceil(grab.dur / step));
+          const j = Math.floor(age / step), f = age / step - j;
+          const wp = (n) => n <= 0 ? grab.a0 : n >= N ? grab.a1
+            : grab.a0 + (grab.a1 - grab.a0) * (n / N) + (grabHash(grab.seed, n) * 2 - 1) * jit;
+          const k = Math.min(1, f / 0.25), s = k * k * (3 - 2 * k);
+          grabTheta = wp(j) + (wp(j + 1) - wp(j)) * s;
+        } else if (age > grab.dur) grab = null;
+      }
+      if (!grabbing) {
+        const rest = (sig && sig.ga) || 0;
+        if (gridActive) grabTheta += (rest - grabTheta) * Math.min(1, dt * 2.5); // settles onto its perch
+        else grabTheta = rest; // hidden: snap, no invisible glide
+      }
+      const az = GRID_AZ + grabTheta;
+      sigil.group.position.set(Math.sin(az) * GRID_R, ENC.sigil.gridPos[1], Math.cos(az) * GRID_R);
+      sigil.group.lookAt(0, 6, 0); // re-faces the arena as it rides — codes stay readable
+      grabBeam.visible = grabbing;
+      if (grabbing) {
+        // the tether bites the handle on the seed's side and thrums
+        const hand = sigil.handles[grab.seed & 1].getWorldPosition(V3B);
+        V3.set(ENC.bossPos[0], ENC.bossPos[1] + 2, ENC.bossPos[2]);
+        const len = V3.distanceTo(hand);
+        grabBeam.position.copy(V3).add(hand).multiplyScalar(0.5);
+        const thrum = 1 + Math.sin(t * 34) * 0.3;
+        grabBeam.scale.set(thrum, len, thrum);
+        grabBeam.quaternion.setFromUnitVectors(UP, hand.sub(V3).normalize());
+        grabMat.opacity = 0.55 + Math.sin(t * 21) * 0.25;
       }
 
       // --- pillar panels & band tints follow the round's sigil ---
@@ -371,11 +448,11 @@ export function buildWorld(scene, targets) {
           rig.beams.visible = false;
           rig.dot.visible = rig.laser.visible = true;
           rig.dot.scale.setScalar(1.85 + Math.sin(t * 22) * 0.25);
-          const len = strikeFocus.distanceTo(rig.target);
-          rig.laser.position.copy(strikeFocus).add(rig.target).multiplyScalar(0.5);
+          const len = rig.focus.distanceTo(rig.target);
+          rig.laser.position.copy(rig.focus).add(rig.target).multiplyScalar(0.5);
           rig.laser.scale.set(1 + Math.sin(t * 30) * 0.25, len, 1 + Math.sin(t * 30) * 0.25);
           rig.laser.quaternion.setFromUnitVectors(
-            UP, V3.copy(rig.target).sub(strikeFocus).normalize());
+            UP, V3.copy(rig.target).sub(rig.focus).normalize());
         }
       }
 
@@ -543,10 +620,52 @@ function buildSigilLattice(targets) {
     new THREE.LineBasicMaterial({ color: 0x35406e, transparent: true, opacity: 0.45, fog: false })));
   frame.frustumCulled = false;
   group.add(frame);
+
+  // The panel reads as a physical object the boss can seize: a faint backing
+  // plate, a bright border, and grab-handles standing off each side edge.
+  // None of it is shootable — only the star nodes live in `targets`.
+  const ext = gap + 3.2; // panel half-extent beyond the node grid
+  const plate = noRay(new THREE.Mesh(new THREE.PlaneGeometry(ext * 2, ext * 2),
+    new THREE.MeshBasicMaterial({ color: 0x131c42, transparent: true, opacity: 0.55,
+      blending: THREE.AdditiveBlending, depthWrite: false, fog: false, side: THREE.DoubleSide })));
+  plate.position.z = -0.6; // behind the node plane — never coplanar with it
+  plate.frustumCulled = false;
+  group.add(plate);
+  const borderPts = [];
+  const corners = [[-ext, ext], [ext, ext], [ext, -ext], [-ext, -ext]];
+  for (let i = 0; i < 4; i++) {
+    const [ax, ay] = corners[i], [bx, by] = corners[(i + 1) % 4];
+    borderPts.push(ax, ay, 0, bx, by, 0);
+  }
+  const borderGeo = new THREE.BufferGeometry();
+  borderGeo.setAttribute('position', new THREE.Float32BufferAttribute(borderPts, 3));
+  const border = noRay(new THREE.LineSegments(borderGeo,
+    new THREE.LineBasicMaterial({ color: 0x4cc9f0, transparent: true, opacity: 0.8, fog: false })));
+  border.frustumCulled = false;
+  group.add(border);
+  const handleMat = new THREE.MeshBasicMaterial({ color: 0x5fd7ff, fog: false });
+  const barGeo = new THREE.CylinderGeometry(0.45, 0.45, gap * 1.5, 8);
+  const armGeo = new THREE.CylinderGeometry(0.3, 0.3, 2.4, 6).rotateZ(Math.PI / 2);
+  const handles = [-1, 1].map((side) => {
+    const h = new THREE.Group();
+    const bar = noRay(new THREE.Mesh(barGeo, handleMat));
+    bar.frustumCulled = false;
+    h.add(bar);
+    for (const y of [-gap * 0.55, gap * 0.55]) {
+      const arm = noRay(new THREE.Mesh(armGeo, handleMat));
+      arm.position.set(-side * 1.2, y, 0); // reaches back to the panel edge
+      arm.frustumCulled = false;
+      h.add(arm);
+    }
+    h.position.set(side * (ext + 1.6), 0, 0);
+    group.add(h);
+    return h;
+  });
+
   group.position.set(...ENC.sigil.gridPos);
   group.lookAt(0, 6, 0); // gently tilted down toward the arena floor
   return {
-    group, nodes, offMat, onMat, haloOffMat, haloOnMat,
+    group, nodes, handles, offMat, onMat, haloOffMat, haloOnMat,
     setActive(on) { for (const n of nodes) n.mesh.raycast = on ? protoRaycast : () => {}; },
   };
 }

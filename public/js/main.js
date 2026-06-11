@@ -251,7 +251,8 @@ $('deployBtn').onclick = async () => {
   }
   joined = true;
   player = new LocalPlayer(camera, net);
-  weapons = new WeaponSystem({ camera, scene, targets, net, effects, audio, player, hud, getEnc, enemies }, keys);
+  weapons = new WeaponSystem({ camera, scene, targets, net, effects, audio, player, hud, getEnc, enemies,
+    getCls: () => selectedClass }, keys);
   entities = new EntityManager(scene, net.myId, glowPool);
   $('lobbyScreen').classList.add('hidden');
   hud.show();
@@ -261,13 +262,25 @@ $('deployBtn').onclick = async () => {
 document.addEventListener('pointerlockchange', () => {
   if (!joined) return;
   if (!$('lobbyScreen').classList.contains('hidden')) return; // selection screen owns the cursor
-  $('resumeScreen').classList.toggle('hidden', !!document.pointerLockElement);
+  const locked = !!document.pointerLockElement;
+  $('resumeScreen').classList.toggle('hidden', locked);
+  if (!locked) {
+    $('resumeHint').textContent = getEnc()?.st === 'LOBBY'
+      ? 'Click to return · ESC to rebuild your loadout'
+      : 'Click to return to the fight';
+  }
 });
 $('resumeScreen').onclick = () => renderer.domElement.requestPointerLock();
 
 addEventListener('keydown', (e) => {
   // !e.repeat matters: held-E key-repeat used to restart the revive channel forever
   if (e.code === 'KeyE' && !e.repeat && joined && document.pointerLockElement) net.interact();
+  // ESC from the pause overlay reopens the selection screen — lobby only. (The
+  // first ESC never reaches us: the browser eats it to release pointer lock.)
+  if (e.code === 'Escape' && joined && !document.pointerLockElement
+      && $('lobbyScreen').classList.contains('hidden') && getEnc()?.st === 'LOBBY') {
+    showLoadoutScreen(false);
+  }
 });
 
 // ---------- liveliness sfx state ----------
@@ -322,8 +335,17 @@ net.on('snap', (m) => {
 
   const st = m.enc.st;
   if (st !== prevSt) {
-    if (st === 'OBLIT') { hud.announce('OBLITERATION INCOMING', 'ONLY KINDLED LIGHT ENDURES THE BLAST'); audio.riser(); }
-    if (st === 'FINAL') { hud.announce('FINAL STAND', 'REALITY FRAYS AT ITS EDGES'); audio.roar(); }
+    // the fireteam plate-started the raid while this guardian lingered on the
+    // selection screen — yank them back to the pause veil so they notice
+    if (st === 'MECH' && prevSt === 'LOBBY' && joined && !$('lobbyScreen').classList.contains('hidden')) {
+      $('lobbyScreen').classList.add('hidden');
+      hud.show();
+      $('resumeHint').textContent = 'Click to return to the fight';
+      $('resumeScreen').classList.remove('hidden');
+      hud.toast('The Vault seals!', 'warn');
+    }
+    if (st === 'OBLIT') { hud.announce('OBLITERATION INCOMING', 'KINDLED LIGHT ENDURES'); audio.riser(); }
+    if (st === 'FINAL') { hud.announce('FINAL STAND', 'REALITY FRAYS'); audio.roar(); }
     if (st === 'DAMAGE') hud.announce('DAMAGE PHASE', 'UNLOAD EVERYTHING');
     if (st === 'LOBBY' && prevSt !== 'LOBBY') hud.endScreen(null);
     audio.intensity(st === 'DAMAGE' || st === 'FINAL' ? 1 : st === 'LOBBY' ? 0 : 0.35);
@@ -333,6 +355,12 @@ net.on('snap', (m) => {
     prevSt = st;
   }
 });
+
+// grenades and their booms wear the thrower's class color on every screen
+const clsColorOf = (id) => {
+  const cls = snap?.players.find(p => p.id === id)?.cls;
+  return cls ? new THREE.Color(CLASSES[cls].color).getHex() : null;
+};
 
 net.on('pf', (m) => {
   if (m.id === net.myId) return;
@@ -344,7 +372,8 @@ net.on('pf', (m) => {
     audio.shot(m.w);
   } else if (['rocket', 'gjally', 'grenade', 'nova'].includes(m.w)) {
     const speed = m.w === 'rocket' ? 55 : m.w === 'gjally' ? WEAPONS.gjally.projSpeed : m.w === 'nova' ? SUPER.nova.speed : 22;
-    const color = m.w === 'rocket' ? 0xffaa33 : m.w === 'gjally' ? 0x7dffb0 : m.w === 'nova' ? 0x9d4edd : 0x7ae582;
+    const color = m.w === 'rocket' ? 0xffaa33 : m.w === 'gjally' ? 0x7dffb0 : m.w === 'nova' ? 0x9d4edd
+      : (clsColorOf(m.id) ?? 0x7ae582);
     const mesh = new THREE.Mesh(new THREE.SphereGeometry(m.w === 'nova' ? 0.55 : 0.18, 8, 8),
       new THREE.MeshBasicMaterial({ color }));
     mesh.raycast = () => {};
@@ -356,8 +385,17 @@ net.on('pf', (m) => {
 });
 
 net.on('explosion', (m) => {
-  effects.explosion(new THREE.Vector3(...m.p), m.kind);
+  effects.explosion(new THREE.Vector3(...m.p), m.kind, m.kind === 'grenade' ? clsColorOf(m.by) : null);
   audio.explosion(m.kind === 'nova');
+});
+// voidcaller grenade orb: the server-owned DoT zone parks where the blast was
+net.on('voidOrb', (m) => effects.voidOrb(new THREE.Vector3(m.p[0], m.p[1], m.p[2]), m.r, m.dur));
+// sentinel mend-orb delivery: cyan pop + '+hp' number on every screen
+net.on('healBurst', (m) => {
+  const p = new THREE.Vector3(m.p[0], m.p[1], m.p[2]);
+  effects.explosion(p, 'heal');
+  effects.damageNumber(p, `+${m.amt}`, 'heal');
+  if (m.id === net.myId) audio.pickup();
 });
 net.on('enemyDied', (m) => {
   // seekers die where they fly; ground adds pop at chest height
@@ -404,13 +442,14 @@ net.on('hurt', (m) => {
   if (m.imp && player) player.impulse(m.imp);
 });
 net.on('ammo', (m) => { if (weapons) weapons.addAmmo(m.kind); });
-// rally banner: restock state is client-side (ammo/cooldowns live in WeaponSystem);
+// rally banner: ammo/cooldowns restock client-side (they live in WeaponSystem);
+// the super gauge is server-owned — the server fills it on the same interact;
 // bannerRallied gates the prompt so it stops offering a rally you've already taken
 net.on('banner', (m) => audio.bannerPlant(volAt(m.p)));
 net.on('restock', () => {
   bannerRallied = true;
   if (weapons) weapons.restock();
-  hud.toast('The standard\'s light fills your reserves — your arms sit heavy and ready.', 'good');
+  hud.toast('Arms heavy and ready.', 'good');
 });
 net.on('down', () => audio.down());
 net.on('revived', () => audio.revive());
@@ -432,20 +471,22 @@ net.on('sweep', () => {
   audio.laser();
 });
 net.on('barrage', () => {
-  hud.announce('RHYTHMIC BARRAGE', 'THE RINGS KEEP A KILLING BEAT');
+  hud.announce('RHYTHMIC BARRAGE', 'KEEP THE BEAT');
   audio.volley();
 });
-net.on('bossWake', () => { audio.roar(); hud.announce('VAULTHUR AWAKENS', 'SHATTERED WATCHER OF THE DEEP'); });
+net.on('bossWake', () => { audio.roar(); hud.announce('VAULTHUR AWAKENS', 'WATCHER OF THE DEEP'); });
 net.on('bossFocus', (m) => {
   audio.roar();
-  if (m.id === net.myId) hud.announce('VAULTHUR MARKS YOU', 'ITS BURNING GAZE FINDS ONLY YOU');
-  else hud.announce(`VAULTHUR MARKS ${m.name.toUpperCase()}`, 'ITS BLISTERED BACK TURNS TO THE DARK');
+  if (m.id === net.myId) hud.announce('VAULTHUR MARKS YOU', 'ITS GAZE FINDS YOU');
+  else hud.announce(`VAULTHUR MARKS ${m.name.toUpperCase()}`, 'ITS BACK LIES OPEN');
 });
 net.on('capsule', () => audio.pickup()); // progress lives in the side buff readout
-net.on('keyGet', () => {
+net.on('keyGet', (m) => {
+  // broadcast: whoever claimed it, the floor key vanishes for everyone at once
+  if (entities) entities.removeKeyDrop(m.kid);
+  if (m.id !== net.myId) return;
   audio.keyChime();
-  hud.itemTip('RAID RELIC', 'AURIC KEY',
-    '"Crystallized ichor of the vault\'s first light. The Refuge Wells sealed themselves from the inside — this wakes one. Once."');
+  hud.itemTip('RAID RELIC', 'AURIC KEY', '"Wakes one well. Once."');
 });
 net.on('wellWake', (m) => {
   audio.wellBloom();
@@ -458,10 +499,15 @@ net.on('sigilNode', () => audio.ui()); // a star answers the shot
 net.on('sigilMatch', (m) => {
   audio.keyChime();
   const name = ARENA.pedestals[m.color]?.name || '';
-  hud.announce(`${name} CIPHER ACCEPTED`, 'THE LATTICE GATHERS ITS LIGHT');
+  hud.announce(`${name} CIPHER ACCEPTED`, 'THE LATTICE GATHERS LIGHT');
   // stars → focal dot → laser; the server's sigilBlast lands strikeDelay later
   world.sigilStrike(m.code, m.color, () => enemies.views.get(String(m.kid))?.group.position || null);
   setTimeout(() => audio.laser(), ENC.sigil.strikeDelay * 0.55 * 1000);
+});
+net.on('latticeGrab', (m) => {
+  // the boss tethers the sky panel — world.update replays the seeded drag
+  world.latticeGrab(m);
+  audio.laser();
 });
 net.on('sigilBlast', (m) => {
   effects.explosion(new THREE.Vector3(m.p[0], 2, m.p[2]), 'nova');
@@ -471,12 +517,12 @@ net.on('sigilBlast', (m) => {
 net.on('heraldRise', (m) => {
   audio.roar();
   const name = ARENA.pedestals[m.color]?.name || '';
-  hud.announce('THE LAST KEEPER ASCENDS', `ITS WARD HUMS IN TUNE WITH THE ${name} LOCK`);
+  hud.announce('THE LAST KEEPER ASCENDS', `ATTUNED TO LOCK ${name}`);
 });
 net.on('wardBuff', () => {
   // private: this guardian kindled the lock — their fire now wounds the ward
   audio.wellBloom();
-  hud.announce('THE LOCK ANSWERS YOU', "THE HERALD'S WARD LIES BARE TO YOUR LIGHT");
+  hud.announce('THE LOCK ANSWERS YOU', 'ITS WARD LIES BARE');
 });
 net.on('wardBlast', (m) => {
   effects.explosion(new THREE.Vector3(m.p[0], m.p[1], m.p[2]), 'nova');
@@ -520,7 +566,7 @@ net.on('unlock', (m) => {
   if (m.what === 'gjally') {
     unlocks.gjally = true;
     audio.unlockChime();
-    hud.toast('✦ GJALLARHORN UNLOCKED — available at the next loadout screen ✦', 'good');
+    hud.toast('✦ GJALLARHORN UNLOCKED ✦', 'good');
   }
 });
 net.on('loot', (m) => { hud.lootToast(m.item); audio.victory(); });
@@ -639,7 +685,7 @@ function loop() {
   if (joined && player && !lobbyVisible) {
     player.update(dt, now);
     weapons.update(dt, now);
-    entities.update(dt, renderTime, now);
+    entities.update(dt, renderTime, now, player.pos);
     const my = me();
     hud.update(dt, snap, my, weapons, serverNow(), net.myId);
     updatePrompt();

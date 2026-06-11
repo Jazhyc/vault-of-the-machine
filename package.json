@@ -1,0 +1,17 @@
+{
+  "name": "shattered-vault",
+  "version": "1.0.0",
+  "description": "SHATTERED VAULT — a 1-4 player Destiny-style raid encounter. Supers, weapon swapping, and VAULTHUR, Shattered Watcher of the Deep.",
+  "type": "module",
+  "scripts": {
+    "start": "node server/main.js",
+    "web": "node server/web.js",
+    "test": "node test/encounter.test.js",
+    "smoke": "node test/smoke.js"
+  },
+  "dependencies": {
+    "localtunnel": "^2.0.2",
+    "three": "^0.165.0",
+    "ws": "^8.17.0"
+  }
+}

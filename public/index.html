@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SHATTERED VAULT</title>
+<link rel="icon" href="data:,">
+<style>
+  :root {
+    --rose: #ff5d8f; --azure: #4cc9f0; --amber: #ffb703; --void: #9d4edd;
+    --hud: rgba(235, 235, 245, 0.92);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #07040c;
+    font-family: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif; color: var(--hud);
+    user-select: none; }
+  canvas { display: block; }
+  .hidden { display: none !important; }
+
+  /* ---------- screens ---------- */
+  .screen { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; background: radial-gradient(ellipse at 50% 30%, #1a0f2e 0%, #07040c 70%);
+    z-index: 50; }
+  /* the selection screen leaves its right side translucent so the 3D
+     guardian/loadout showcase rendering behind it shows through */
+  #lobbyScreen { align-items: flex-start; padding-left: 6vw;
+    background: linear-gradient(100deg, rgba(11,7,20,0.97) 0%, rgba(11,7,20,0.93) 38%, rgba(11,7,20,0.5) 66%, rgba(11,7,20,0.08) 100%); }
+  #lobbyScreen .title { font-size: 46px; letter-spacing: 12px; }
+  #lobbyScreen .controlsHint { text-align: left; }
+  .title { font-size: 64px; font-weight: 200; letter-spacing: 18px; margin-bottom: 4px;
+    text-shadow: 0 0 30px rgba(157, 78, 221, 0.8); }
+  .subtitle { font-size: 14px; letter-spacing: 6px; opacity: 0.7; margin-bottom: 36px; text-transform: uppercase; }
+  #nameInput { background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.25); color: var(--hud);
+    padding: 10px 18px; font-size: 18px; letter-spacing: 2px; text-align: center; outline: none; margin-bottom: 26px; width: 280px; }
+  .classes { display: flex; gap: 18px; margin-bottom: 30px; }
+  .classCard { width: 215px; padding: 18px 16px; border: 1px solid rgba(255,255,255,0.18);
+    background: rgba(255,255,255,0.04); cursor: pointer; transition: all .15s; }
+  .classCard:hover { background: rgba(255,255,255,0.09); transform: translateY(-3px); }
+  .classCard.sel { border-color: var(--cc, #fff); box-shadow: 0 0 24px color-mix(in srgb, var(--cc) 45%, transparent); background: rgba(255,255,255,0.08); }
+  .classCard h3 { font-weight: 400; letter-spacing: 3px; color: var(--cc, #fff); margin-bottom: 6px; }
+  .classCard .sup { font-size: 12px; letter-spacing: 1px; opacity: 0.95; margin-bottom: 8px; text-transform: uppercase; }
+  .classCard p { font-size: 12px; line-height: 1.5; opacity: 0.65; }
+  #loadout { display: flex; flex-direction: column; gap: 8px; margin-bottom: 28px; }
+  .wRow { display: flex; align-items: center; gap: 10px; }
+  .wRowLabel { width: 86px; text-align: right; font-size: 11px; letter-spacing: 2px; opacity: .55; }
+  .wCard { padding: 8px 16px; border: 1px solid rgba(255,255,255,.18); background: rgba(255,255,255,.04);
+    cursor: pointer; font-size: 12px; letter-spacing: 1.5px; transition: all .12s; min-width: 170px; }
+  .wCard:hover { background: rgba(255,255,255,.1); }
+  .wCard.sel { border-color: #fff; background: rgba(255,255,255,.12); }
+  .wCard .sub { display: block; font-size: 10px; opacity: .55; margin-top: 2px; letter-spacing: .5px; }
+  .wCard.exotic { border-color: var(--amber); color: var(--amber); box-shadow: 0 0 16px rgba(255,183,3,.35); }
+  .wCard.exotic.sel { background: rgba(255,183,3,.16); }
+
+  #deployBtn { padding: 14px 70px; font-size: 18px; letter-spacing: 8px; background: var(--void);
+    color: #fff; border: none; cursor: pointer; transition: all .15s; }
+  #deployBtn:hover { box-shadow: 0 0 30px var(--void); }
+  #deployBtn:disabled { opacity: .4; cursor: wait; }
+  .controlsHint { margin-top: 34px; font-size: 12px; opacity: .55; line-height: 1.9; text-align: center; letter-spacing: 1px; }
+  .controlsHint b { opacity: 1; color: #fff; font-weight: 600; }
+  #connStatus { margin-top: 14px; font-size: 13px; color: var(--rose); height: 16px; }
+
+  #resumeScreen, #endScreen { background: rgba(7, 4, 12, 0.82); cursor: pointer; z-index: 60; }
+  #endScreen .title { font-size: 52px; }
+  #endTitle.win { color: var(--amber); text-shadow: 0 0 40px var(--amber); }
+  #endTitle.lose { color: var(--rose); text-shadow: 0 0 40px var(--rose); }
+
+  /* ---------- HUD ---------- */
+  #hud { position: fixed; inset: 0; pointer-events: none; z-index: 10; }
+  #crosshair { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); }
+  #crosshair::before, #crosshair::after { content: ''; position: absolute; background: rgba(255,255,255,0.85); }
+  #crosshair::before { width: 2px; height: 10px; left: -1px; top: -5px; }
+  #crosshair::after { width: 10px; height: 2px; left: -5px; top: -1px; }
+  #hitmarker { position: absolute; left: 50%; top: 50%; width: 26px; height: 26px; transform: translate(-50%,-50%) rotate(45deg);
+    opacity: 0; transition: opacity .18s; }
+  #hitmarker div { position: absolute; background: #fff; }
+  #hitmarker .h { width: 100%; height: 2px; top: 12px; } #hitmarker .v { height: 100%; width: 2px; left: 12px; }
+  #hitmarker .h::before, #hitmarker .v::before { content:''; position:absolute; inset: 0; background: inherit; }
+  #hitmarker.crit div { background: var(--amber); box-shadow: 0 0 6px var(--amber); }
+
+  #bossbar { position: absolute; top: 26px; left: 50%; transform: translateX(-50%); width: 560px; text-align: center; }
+  #bossname { font-size: 13px; letter-spacing: 5px; margin-bottom: 6px; opacity: .9; }
+  #bossbarOuter { height: 9px; background: rgba(255,255,255,0.12); border: 1px solid rgba(255,255,255,0.3); position: relative; }
+  #bossbarFill { height: 100%; width: 100%; background: linear-gradient(90deg, #c83264, #ff5d8f); transition: width .25s; }
+  #bossbarFill.final { background: linear-gradient(90deg, #d00000, #ff6d00); animation: pulse 0.7s infinite alternate; }
+  #bossbarMark { position: absolute; top: -3px; bottom: -3px; width: 2px; background: #ff6d00;
+    box-shadow: 0 0 6px #ff6d00; opacity: .85; }
+  #immuneTag { position: absolute; right: -68px; top: -4px; font-size: 11px; letter-spacing: 2px; color: #cdd7ff; opacity: .9; }
+  #phaseLine { margin-top: 8px; font-size: 14px; letter-spacing: 3px; text-transform: uppercase; opacity: .95; }
+  #phaseLine.danger { color: var(--rose); }
+  @keyframes pulse { from { filter: brightness(0.9);} to { filter: brightness(1.5);} }
+
+  #announce { position: absolute; top: 26%; width: 100%; text-align: center; font-size: 34px; font-weight: 300;
+    letter-spacing: 10px; text-transform: uppercase; opacity: 0; transition: opacity .4s; text-shadow: 0 0 24px rgba(157,78,221,.9); }
+  #announceSub { font-size: 14px; letter-spacing: 4px; margin-top: 10px; opacity: .8; }
+
+  #toasts { position: absolute; left: 50%; transform: translateX(-50%); bottom: 27%; width: 620px; text-align: center;
+    display: flex; flex-direction: column-reverse; gap: 4px; }
+  .toast { font-size: 14px; letter-spacing: 1px; padding: 3px 0; opacity: .95; transition: opacity .6s;
+    text-shadow: 0 1px 4px #000; }
+  .toast.warn { color: var(--amber); } .toast.good { color: #7ae582; } .toast.boss { color: var(--rose); letter-spacing: 3px; }
+
+  #prompt { position: absolute; left: 50%; top: 58%; transform: translateX(-50%); font-size: 15px; letter-spacing: 2px;
+    background: rgba(0,0,0,.45); padding: 7px 18px; border: 1px solid rgba(255,255,255,.25); }
+  #prompt b { color: var(--azure); }
+  #readyBarOuter { position: absolute; left: 50%; top: 64%; transform: translateX(-50%); width: 220px; height: 5px;
+    background: rgba(255,255,255,.15); }
+  /* width arrives in 10 Hz snapshot steps; the linear transition bridges them */
+  #readyBarFill { height: 100%; width: 0%; background: var(--azure); transition: width .12s linear; }
+
+  /* bottom-left vitals */
+  #vitals { position: absolute; left: 38px; bottom: 38px; width: 280px; }
+  #hpBarOuter { height: 10px; background: rgba(255,255,255,0.13); border: 1px solid rgba(255,255,255,0.35); }
+  #hpBarFill { height: 100%; width: 100%; background: linear-gradient(90deg, #e8e8f5, #fff); transition: width .12s; }
+  #hpBarFill.low { background: var(--rose); }
+  #superRow { display: flex; align-items: center; gap: 12px; margin-top: 10px; }
+  #superRing { width: 46px; height: 46px; border-radius: 50%; display: grid; place-items: center;
+    background: conic-gradient(var(--cc, var(--void)) calc(var(--p, 0) * 1%), rgba(255,255,255,.12) 0); }
+  #superRing div { width: 36px; height: 36px; border-radius: 50%; background: #0b0714; display: grid; place-items: center;
+    font-size: 10px; letter-spacing: 1px; }
+  #superRing.ready { animation: pulse .6s infinite alternate; box-shadow: 0 0 18px var(--cc, var(--void)); }
+  #abilityHints { font-size: 10px; opacity: .6; letter-spacing: 1px; line-height: 1.7; }
+  #buffs { margin-top: 8px; font-size: 12px; letter-spacing: 2px; color: var(--void); min-height: 16px; }
+  #buffs .buff { display: block; } #buffs .gold { color: var(--amber); } #buffs .well { color: var(--azure); }
+  #buffs .viral { color: #86e63c; }
+
+  /* bottom-right weapons */
+  #weapons { position: absolute; right: 38px; bottom: 38px; text-align: right; }
+  .wslot { margin-top: 6px; padding: 6px 12px; border-right: 3px solid rgba(255,255,255,0.25); opacity: .45; transition: all .15s; }
+  .wslot.cur { opacity: 1; border-right-color: var(--amber); background: linear-gradient(270deg, rgba(255,255,255,.08), transparent); }
+  .wslot .wname { font-size: 12px; letter-spacing: 2px; }
+  .wslot .wammo { font-size: 20px; font-weight: 600; letter-spacing: 2px; }
+  .wslot .wammo span { font-size: 12px; opacity: .6; }
+  .wslot.empty .wammo { color: var(--rose); }
+  #reloadHint { font-size: 11px; letter-spacing: 3px; color: var(--amber); margin-top: 6px; height: 14px; }
+
+  /* roster top-left */
+  #roster { position: absolute; left: 38px; top: 34px; }
+  .mate { margin-bottom: 10px; width: 190px; }
+  .mate .mname { font-size: 12px; letter-spacing: 2px; margin-bottom: 3px; }
+  .mate .mname .down { color: var(--rose); font-weight: 700; }
+  .mate .mhpOuter { height: 4px; background: rgba(255,255,255,.13); }
+  .mate .mhpFill { height: 100%; background: #fff; }
+  .mate .msup { height: 2px; margin-top: 2px; background: rgba(255,255,255,.1); }
+  .mate .msupFill { height: 100%; }
+
+  #vignette { position: absolute; inset: 0; pointer-events: none; opacity: 0; transition: opacity .3s;
+    background: radial-gradient(ellipse at center, transparent 52%, rgba(200, 20, 40, 0.55) 100%); }
+  #downedOverlay { position: absolute; inset: 0; display: grid; place-items: center;
+    background: radial-gradient(ellipse at center, transparent 30%, rgba(120, 0, 20, 0.5) 100%); }
+  #downedOverlay .big { font-size: 40px; letter-spacing: 12px; color: var(--rose); text-align: center; }
+  #downedOverlay .small { font-size: 14px; letter-spacing: 3px; opacity: .85; margin-top: 12px; text-align: center; }
+
+  #flash { position: absolute; inset: 0; background: #fff; opacity: 0; pointer-events: none; z-index: 45; }
+  #goldenFrame { position: absolute; inset: 0; pointer-events: none; opacity: 0; transition: opacity .4s;
+    box-shadow: inset 0 0 140px rgba(255, 183, 3, 0.5); }
+
+  #channel { position: absolute; left: 50%; bottom: 32%; transform: translateX(-50%); width: 280px; text-align: center; }
+  #channelLabel { font-size: 13px; letter-spacing: 3px; margin-bottom: 6px; color: #7ae582; text-shadow: 0 1px 4px #000; }
+  #channelOuter { height: 7px; background: rgba(255,255,255,.15); border: 1px solid rgba(255,255,255,.35); }
+  #channelFill { height: 100%; width: 0%; background: #7ae582; }
+
+  #scope { position: absolute; inset: 0; background: radial-gradient(circle at center, transparent 26%, rgba(0,0,0,0.96) 27%); }
+  #scope::before { content: ''; position: absolute; left: 50%; top: 0; bottom: 0; width: 1px; background: rgba(255,255,255,.5); }
+  #scope::after { content: ''; position: absolute; top: 50%; left: 0; right: 0; height: 1px; background: rgba(255,255,255,.5); }
+
+  #lootToast { position: absolute; left: 50%; top: 38%; transform: translateX(-50%); text-align: center;
+    background: rgba(20, 14, 2, 0.85); border: 1px solid var(--amber); padding: 18px 40px; }
+  #lootToast .lt1 { font-size: 12px; letter-spacing: 4px; color: var(--amber); }
+  #lootToast .lt2 { font-size: 22px; letter-spacing: 3px; margin-top: 6px; }
+  #lootToast .lt3 { font-size: 11px; letter-spacing: 1px; font-style: italic; opacity: .75;
+    max-width: 420px; margin-top: 8px; line-height: 1.5; }
+
+  #help { position: absolute; right: 38px; top: 34px; font-size: 12px; line-height: 2; letter-spacing: 1px;
+    background: rgba(0,0,0,.6); padding: 14px 22px; border: 1px solid rgba(255,255,255,.2); }
+  #help b { color: var(--azure); display: inline-block; width: 88px; }
+  #helpHint { position: absolute; right: 38px; top: 34px; font-size: 11px; opacity: .45; letter-spacing: 2px; }
+  #perf { position: absolute; right: 38px; top: 56px; font-size: 10px; opacity: .35; letter-spacing: 1px; }
+</style>
+</head>
+<body>
+
+<div id="lobbyScreen" class="screen">
+  <div class="title">SHATTERED VAULT</div>
+  <div class="subtitle">A 1 – 6 player raid encounter</div>
+  <input id="nameInput" maxlength="16" placeholder="GUARDIAN NAME" spellcheck="false">
+  <div class="classes" id="classCards"></div>
+  <div id="loadout"></div>
+  <button id="deployBtn">DEPLOY</button>
+  <div id="connStatus"></div>
+  <div class="controlsHint">
+    <b>WASD</b> move &nbsp; <b>SPACE</b> jump (×2) &nbsp; <b>SHIFT</b> sprint &nbsp; <b>MOUSE</b> aim / fire &nbsp; <b>RMB</b> aim-down-sights<br>
+    <b>1 / 2 / 3</b> or <b>WHEEL</b> swap weapons &nbsp; <b>R</b> reload &nbsp; <b>G</b> grenade &nbsp; <b>V</b> melee &nbsp; <b>F</b> super &nbsp; <b>E</b> interact / revive &nbsp; <b>H</b> help
+  </div>
+</div>
+
+<div id="resumeScreen" class="screen hidden">
+  <div class="title" style="font-size:30px; letter-spacing:8px;">PAUSED</div>
+  <div class="subtitle">Click to return to the fight</div>
+</div>
+
+<div id="endScreen" class="screen hidden">
+  <div class="title" id="endTitle"></div>
+  <div class="subtitle" id="endSub"></div>
+</div>
+
+<div id="hud" class="hidden">
+  <div id="vignette"></div>
+  <div id="flash"></div>
+  <div id="goldenFrame"></div>
+  <div id="channel" class="hidden"><div id="channelLabel"></div><div id="channelOuter"><div id="channelFill"></div></div></div>
+  <div id="crosshair"></div>
+  <div id="hitmarker"><div class="h"></div><div class="v"></div></div>
+  <div id="scope" class="hidden"></div>
+
+  <div id="bossbar" class="hidden">
+    <div id="bossname"></div>
+    <div id="bossbarOuter"><div id="bossbarFill"></div><div id="bossbarMark"></div><div id="immuneTag" class="hidden">IMMUNE</div></div>
+    <div id="phaseLine"></div>
+  </div>
+
+  <div id="announce"><span id="announceMain"></span><div id="announceSub"></div></div>
+  <div id="toasts"></div>
+  <div id="prompt" class="hidden"></div>
+  <div id="readyBarOuter" class="hidden"><div id="readyBarFill"></div></div>
+
+  <div id="vitals">
+    <div id="hpBarOuter"><div id="hpBarFill"></div></div>
+    <div id="superRow">
+      <div id="superRing"><div id="superPct">0%</div></div>
+      <div id="abilityHints">F SUPER · G GRENADE · V MELEE</div>
+    </div>
+    <div id="buffs"></div>
+  </div>
+
+  <div id="weapons">
+    <div class="wslot" id="w0"><div class="wname"></div><div class="wammo"></div></div>
+    <div class="wslot" id="w1"><div class="wname"></div><div class="wammo"></div></div>
+    <div class="wslot" id="w2"><div class="wname"></div><div class="wammo"></div></div>
+    <div id="reloadHint"></div>
+  </div>
+
+  <div id="roster"></div>
+  <div id="perf"></div>
+  <div id="helpHint">H — CONTROLS</div>
+  <div id="help" class="hidden">
+    <b>WASD</b> move<br><b>SPACE ×2</b> double jump<br><b>SHIFT</b> sprint<br><b>LMB</b> fire<br><b>RMB</b> ADS<br>
+    <b>1/2/3</b> weapons<br><b>R</b> reload<br><b>G</b> grenade<br><b>V</b> melee<br><b>F</b> super<br><b>E</b> interact / revive
+  </div>
+
+  <div id="downedOverlay" class="hidden">
+    <div><div class="big">DOWNED</div><div class="small" id="downedText"></div></div>
+  </div>
+  <div id="lootToast" class="hidden"><div class="lt1" id="lootHead">EXOTIC ENGRAM</div><div class="lt2" id="lootName"></div><div class="lt3 hidden" id="lootLore"></div></div>
+</div>
+
+<script type="importmap">{ "imports": { "three": "/vendor/three.module.js" } }</script>
+<script type="module" src="/js/main.js"></script>
+</body>
+</html>

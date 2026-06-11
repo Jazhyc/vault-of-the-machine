@@ -90,9 +90,9 @@ export class GameAudio {
   }
   dryFire() { this.tone(700, 0.08, 0.04, 'square'); }
   reload() { this.tone(420, 0.07, 0.05, 'square'); setTimeout(() => this.tone(640, 0.07, 0.05, 'square'), 120); }
-  explosion(big = false) {
-    this.noise(big ? 0.8 : 0.55, big ? 0.9 : 0.55, big ? 320 : 480);
-    this.tone(big ? 55 : 70, 0.5, big ? 0.8 : 0.5, 'sine', 25);
+  explosion(big = false, vol = 1) {
+    this.noise((big ? 0.8 : 0.55) * vol, big ? 0.9 : 0.55, big ? 320 : 480);
+    this.tone(big ? 55 : 70, 0.5 * vol, big ? 0.8 : 0.5, 'sine', 25);
   }
   hitTick(crit) {
     this.tone(crit ? 2300 : 1700, 0.09, 0.03, 'square');
@@ -190,6 +190,43 @@ export class GameAudio {
     this.noise(0.16 * vol, 0.09, 750, 1, 'lowpass', 0.002);
     this.tone(880, 0.07 * vol, 0.16, 'triangle');
   }
+  seekerLaunch(n = 2, vol = 1) { // hatch thump, then one staggered whoosh per missile
+    this.noise(0.3 * vol, 0.22, 420, 1, 'lowpass', 0.004);
+    this.tone(95, 0.18 * vol, 0.2, 'sine', 50);
+    for (let i = 0; i < Math.min(n, 4); i++) { // cap the salvo sfx — big waves must not stack
+      setTimeout(() => {
+        this.noise(0.16 * vol, 0.3, 1100, 2, 'bandpass', 0.02);
+        this.tone(230, 0.08 * vol, 0.3, 'sawtooth', 560, 0.02);
+      }, 100 + i * 120);
+    }
+  }
+  // Homing-ordnance whine: ONE persistent loop (built on first need), gain 0
+  // when idle — never per-seeker one-shots. Called every frame with the nearest
+  // live seeker's closeness (0 far/none … 1 on top of you) and a stereo pan.
+  seekerWhine(closeness = 0, pan = 0) {
+    if (!this.ctx) return;
+    if (!this.whine) {
+      if (closeness <= 0) return; // don't build the nodes just to stay silent
+      const o = this.ctx.createOscillator();
+      o.type = 'sawtooth'; o.frequency.value = 480;
+      const lfo = this.ctx.createOscillator();
+      const lfoG = this.ctx.createGain();
+      lfo.frequency.value = 11; lfoG.gain.value = 26; // mechanical warble
+      lfo.connect(lfoG).connect(o.frequency);
+      const f = this.ctx.createBiquadFilter();
+      f.type = 'bandpass'; f.frequency.value = 1300; f.Q.value = 1.6;
+      const g = this.ctx.createGain(); g.gain.value = 0;
+      const p = this.ctx.createStereoPanner ? this.ctx.createStereoPanner() : null;
+      o.connect(f).connect(g);
+      (p ? g.connect(p) : g).connect(this.master);
+      o.start(); lfo.start();
+      this.whine = { o, g, p };
+    }
+    const t = this.ctx.currentTime;
+    this.whine.g.gain.setTargetAtTime(closeness * 0.085, t, 0.09);
+    this.whine.o.frequency.setTargetAtTime(480 + closeness * 540, t, 0.06);
+    if (this.whine.p) this.whine.p.pan.setTargetAtTime(Math.max(-1, Math.min(1, pan)), t, 0.09);
+  }
   keyChime() { // golden sparkle, distinct from the generic pickup
     this.seq([784, 988, 1175, 1568], 70, f => this.tone(f, 0.13, 0.35, 'triangle'));
     this.tone(196, 0.1, 0.7, 'sine');
@@ -199,6 +236,11 @@ export class GameAudio {
     this.noise(0.1, 1.0, 2600, 1, 'highpass', 0.5);
   }
   unlockChime() { this.seq([659, 831, 988, 1318, 1661], 110, f => this.tone(f, 0.15, 0.5, 'triangle')); }
+  bannerPlant(vol = 1) { // pole thunk into stone, then the cloth snaps open
+    this.tone(70, 0.4 * vol, 0.35, 'sine', 40);
+    this.noise(0.18 * vol, 0.25, 1800, 2, 'bandpass', 0.08);
+    setTimeout(() => this.noise(0.14 * vol, 0.18, 3200, 3, 'highpass', 0.01), 180);
+  }
 
   // ambient ------------------------------------------------------------
   startAmbient() {

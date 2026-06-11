@@ -20,7 +20,8 @@ export class LocalPlayer {
     this.sens = 0.0023;
     this.lastSent = 0;
     this.bobT = 0;
-    this.recoilPitch = 0;
+    this.recoilP = 0; this.recoilY = 0;   // applied camera recoil (chases the target)
+    this.recoilTP = 0; this.recoilTY = 0; // recoil target — kicks add here, eases back to 0
 
     // mirrored server state
     this.hp = PLAYER.maxHp;
@@ -125,11 +126,19 @@ export class LocalPlayer {
     const moving = Math.hypot(this.vel.x, this.vel.z) > 1 && this.onGround;
     this.bobT += dt * (sprinting ? 13 : 9);
     const bob = moving ? Math.sin(this.bobT) * 0.045 : 0;
-    this.recoilPitch *= Math.pow(0.001, dt); // fast decay
+    // Recoil is two-stage: a kick raises the target instantly, the applied
+    // offset chases it (the snap), and the target eases back toward zero (the
+    // recovery). Sustained fire outpaces the recovery, so the spray visibly
+    // walks the weapon's pattern instead of vanishing between shots.
+    const chase = Math.min(1, 35 * dt);
+    this.recoilP += (this.recoilTP - this.recoilP) * chase;
+    this.recoilY += (this.recoilTY - this.recoilY) * chase;
+    const rec = Math.pow(0.015, dt);
+    this.recoilTP *= rec; this.recoilTY *= rec;
     this.camera.position.set(this.pos.x, this.pos.y + PLAYER.eye + bob, this.pos.z);
     // Explicitly zero roll: the lobby orbit camera's lookAt leaves a z (roll)
     // component behind, which otherwise tilts the view for the whole session.
-    this.camera.rotation.set(this.pitch + this.recoilPitch, this.yaw, 0, 'YXZ');
+    this.camera.rotation.set(this.pitch + this.recoilP, this.yaw + this.recoilY, 0, 'YXZ');
     this.camera.fov += (this.fovTarget - this.camera.fov) * Math.min(1, 14 * dt);
     this.camera.updateProjectionMatrix();
 
@@ -144,5 +153,5 @@ export class LocalPlayer {
     }
   }
 
-  kick(amount) { this.recoilPitch += amount; }
+  kick(p, y = 0) { this.recoilTP += p; this.recoilTY += y; }
 }

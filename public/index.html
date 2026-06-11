@@ -25,8 +25,10 @@
      guardian/loadout showcase rendering behind it shows through */
   #lobbyScreen { align-items: flex-start; padding-left: 6vw;
     background: linear-gradient(100deg, rgba(11,7,20,0.97) 0%, rgba(11,7,20,0.93) 38%, rgba(11,7,20,0.5) 66%, rgba(11,7,20,0.08) 100%); }
+  /* the panel sizes itself to its widest row (the class cards) and centers
+     every block — input, cards, loadout, deploy — on one vertical axis */
+  #lobbyPanel { display: flex; flex-direction: column; align-items: center; width: fit-content; }
   #lobbyScreen .title { font-size: 46px; letter-spacing: 12px; }
-  #lobbyScreen .controlsHint { text-align: left; }
   .title { font-size: 64px; font-weight: 200; letter-spacing: 18px; margin-bottom: 4px;
     text-shadow: 0 0 30px rgba(157, 78, 221, 0.8); }
   .subtitle { font-size: 14px; letter-spacing: 6px; opacity: 0.7; margin-bottom: 36px; text-transform: uppercase; }
@@ -59,10 +61,36 @@
   .controlsHint b { opacity: 1; color: #fff; font-weight: 600; }
   #connStatus { margin-top: 14px; font-size: 13px; color: var(--rose); height: 16px; }
 
+  /* ---------- loading veil ---------- */
+  /* Static HTML painted before any JS: covers the window where the lobby is
+     visible but inert (module fetch/parse + the GPU warmup frame). Animations
+     are transform/opacity only so the compositor keeps them moving while
+     module evaluation blocks the main thread. main.js releases it. */
+  #loadScreen { z-index: 100; transition: opacity .7s; }
+  #loadScreen.out { opacity: 0; pointer-events: none; }
+  #loadSigil { position: relative; width: 110px; height: 110px; margin-bottom: 40px; }
+  #loadSigil div { position: absolute; inset: 0; border-radius: 50%; border: 1px solid transparent; }
+  #loadSigil .r1 { border-top-color: var(--void); border-bottom-color: var(--void); animation: spin 3.2s linear infinite; }
+  #loadSigil .r2 { inset: 14px; border-left-color: var(--azure); opacity: .8; animation: spin 2.1s linear infinite reverse; }
+  #loadSigil .r3 { inset: 28px; border-top-color: var(--rose); border-right-color: var(--rose); opacity: .7; animation: spin 4.6s linear infinite; }
+  #loadSigil .core { inset: 44px; border: none; background: var(--void); box-shadow: 0 0 26px var(--void); animation: breathe 1.6s ease-in-out infinite alternate; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes breathe { from { opacity: .4; } to { opacity: 1; } }
+  #loadStatus { font-size: 12px; letter-spacing: 5px; opacity: .55; text-transform: uppercase;
+    animation: breathe 1.3s ease-in-out infinite alternate; }
+
   #resumeScreen, #endScreen { background: rgba(7, 4, 12, 0.82); cursor: pointer; z-index: 60; }
   #endScreen .title { font-size: 52px; }
   #endTitle.win { color: var(--amber); text-shadow: 0 0 40px var(--amber); }
   #endTitle.lose { color: var(--rose); text-shadow: 0 0 40px var(--rose); }
+  #endStats { min-width: 520px; border: 1px solid rgba(255,255,255,.18); background: rgba(255,255,255,.04);
+    padding: 6px 0; }
+  #endStats .srow { display: grid; grid-template-columns: 1fr 110px 130px 110px; gap: 8px;
+    padding: 6px 22px; font-size: 14px; letter-spacing: 2px; }
+  #endStats .srow.head { font-size: 10px; opacity: .55; letter-spacing: 3px;
+    border-bottom: 1px solid rgba(255,255,255,.15); padding-bottom: 8px; margin-bottom: 4px; }
+  #endStats .sval { text-align: right; font-weight: 600; }
+  #endStats .head .sval { font-weight: 400; }
 
   /* ---------- HUD ---------- */
   #hud { position: fixed; inset: 0; pointer-events: none; z-index: 10; }
@@ -179,17 +207,35 @@
 </head>
 <body>
 
-<div id="lobbyScreen" class="screen">
+<div id="loadScreen" class="screen">
+  <div id="loadSigil"><div class="r1"></div><div class="r2"></div><div class="r3"></div><div class="core"></div></div>
   <div class="title">SHATTERED VAULT</div>
   <div class="subtitle">A 1 – 6 player raid encounter</div>
-  <input id="nameInput" maxlength="16" placeholder="GUARDIAN NAME" spellcheck="false">
-  <div class="classes" id="classCards"></div>
-  <div id="loadout"></div>
-  <button id="deployBtn">DEPLOY</button>
-  <div id="connStatus"></div>
-  <div class="controlsHint">
-    <b>WASD</b> move &nbsp; <b>SPACE</b> jump (×2) &nbsp; <b>SHIFT</b> sprint &nbsp; <b>MOUSE</b> aim / fire &nbsp; <b>RMB</b> aim-down-sights<br>
-    <b>1 / 2 / 3</b> or <b>WHEEL</b> swap weapons &nbsp; <b>R</b> reload &nbsp; <b>G</b> grenade &nbsp; <b>V</b> melee &nbsp; <b>F</b> super &nbsp; <b>E</b> interact / revive &nbsp; <b>H</b> help
+  <div id="loadStatus">Breaching the seal…</div>
+</div>
+<script>
+  // Fallback only: if the module graph dies before main.js can release the
+  // veil, say so instead of spinning forever.
+  setTimeout(() => {
+    const ls = document.getElementById('loadScreen');
+    if (ls && !ls.classList.contains('out'))
+      document.getElementById('loadStatus').textContent = 'The seal resists — check the console for errors';
+  }, 15000);
+</script>
+
+<div id="lobbyScreen" class="screen">
+  <div id="lobbyPanel">
+    <div class="title">SHATTERED VAULT</div>
+    <div class="subtitle">A 1 – 6 player raid encounter</div>
+    <input id="nameInput" maxlength="16" placeholder="GUARDIAN NAME" spellcheck="false">
+    <div class="classes" id="classCards"></div>
+    <div id="loadout"></div>
+    <button id="deployBtn">DEPLOY</button>
+    <div id="connStatus"></div>
+    <div class="controlsHint">
+      <b>WASD</b> move &nbsp; <b>SPACE</b> jump (×2) &nbsp; <b>SHIFT</b> sprint &nbsp; <b>MOUSE</b> aim / fire &nbsp; <b>RMB</b> aim-down-sights<br>
+      <b>1 / 2 / 3</b> or <b>WHEEL</b> swap weapons &nbsp; <b>R</b> reload &nbsp; <b>G</b> grenade &nbsp; <b>V</b> melee &nbsp; <b>F</b> super &nbsp; <b>E</b> interact / revive &nbsp; <b>H</b> help
+    </div>
   </div>
 </div>
 
@@ -201,6 +247,7 @@
 <div id="endScreen" class="screen hidden">
   <div class="title" id="endTitle"></div>
   <div class="subtitle" id="endSub"></div>
+  <div id="endStats" class="hidden"></div>
 </div>
 
 <div id="hud" class="hidden">

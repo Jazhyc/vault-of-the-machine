@@ -242,6 +242,7 @@ export class WeaponSystem {
     if (i === this.cur || !this.ctx.player.alive) return;
     this.cur = i;
     this.reloadEnd = 0;
+    this._patIdx = 0;
     this.switchEnd = this.now + 0.25;
     this.models.forEach((m, j) => m.visible = j === i);
     this.ctx.audio.ui();
@@ -272,6 +273,20 @@ export class WeaponSystem {
     this.ctx.audio.ammo();
   }
 
+  // Rally banner blessing: full mags, reserves to their hard cap (above the
+  // fresh-spawn count — that's the point of planting), abilities off cooldown.
+  restock() {
+    for (let i = 0; i < this.defs.length; i++) {
+      const d = this.defs[i], s = this.state[i];
+      s.mag = d.mag;
+      if (Number.isFinite(s.reserves)) s.reserves = d.maxReserves ?? d.reserves;
+    }
+    this.reloadEnd = 0;
+    this.grenadeReadyAt = 0;
+    this.meleeReadyAt = 0;
+    this.ctx.audio.pickup();
+  }
+
   aimDir(spread) {
     const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(this.ctx.camera.quaternion);
     if (spread > 0) {
@@ -292,7 +307,24 @@ export class WeaponSystem {
   triggerFlash() {
     this.flashUntil = this.now + 0.05;
     this._flashDirty = true;
-    this._kickRoll = Math.random() - 0.5;
+  }
+
+  // Walk the weapon's recoil pattern (d.recoil: [up, right] steps in multiples
+  // of d.kick). The index resets once fire pauses past a shot interval or on
+  // weapon switch; past the end the spray holds the last step with a
+  // horizontal wander. The viewmodel roll/yaw kick follows the same direction.
+  applyRecoil(d) {
+    const pat = d.recoil || [[1, 0]];
+    if (this.now - (this._patAt || 0) > 60 / d.rpm + 0.3) this._patIdx = 0;
+    this._patAt = this.now;
+    const i = this._patIdx++;
+    const step = pat[Math.min(i, pat.length - 1)];
+    let right = step[1];
+    if (i >= pat.length) right += (Math.random() - 0.5) * 0.7;
+    const k = d.kick * (this.ads ? 0.55 : 1);
+    this.ctx.player.kick(step[0] * k, -right * k); // negative yaw turns the view right
+    this._kickRoll = right * 0.7 + (Math.random() - 0.5) * 0.25;
+    this._kickYaw = -right * 0.05;
   }
 
   raycast(dir, range) {
@@ -318,7 +350,7 @@ export class WeaponSystem {
     this.lastShot = this.now;
     this.fireKick = 1;
     this.triggerFlash();
-    this.ctx.player.kick(d.kick * (this.ads ? 0.5 : 1));
+    this.applyRecoil(d);
     this.ctx.audio.shot(d.key);
     this.ctx.net.fire(d.key, this.muzzleWorld().toArray(), this.aimDir(0).toArray());
 
@@ -372,6 +404,10 @@ export class WeaponSystem {
       }
       const crit = !!hit.object.userData.crit;
       let dmg = d.dmg * (crit ? d.critMul : 1);
+      if (d.falloff) {
+        const t = Math.min(1, Math.max(0, (hit.distance - d.falloff.start) / (d.range - d.falloff.start)));
+        dmg *= 1 - t * (1 - d.falloff.min);
+      }
       if (this.golden()) dmg *= SUPER.golden.mul;
       const key = ent.kind === 'boss' ? 'boss' : ent.id;
       const acc = perTarget.get(key) || { dmg: 0, crit: false, point: hit.point };
@@ -399,7 +435,7 @@ export class WeaponSystem {
     this.lastShot = this.now;
     this.fireKick = 1;
     this.triggerFlash();
-    this.ctx.player.kick(0.03);
+    this.applyRecoil(this.def);
     this.ctx.audio.shot('rocket');
     const dir = this.aimDir(0.004);
     const from = this.muzzleWorld();
@@ -413,7 +449,7 @@ export class WeaponSystem {
     this.lastShot = this.now;
     this.fireKick = 1;
     this.triggerFlash();
-    this.ctx.player.kick(0.035);
+    this.applyRecoil(d);
     this.ctx.audio.shot('gjally');
     const dir = this.aimDir(0.003);
     const from = this.muzzleWorld();
@@ -683,6 +719,7 @@ export class WeaponSystem {
     // recoil kick + melee lunge
     pz += this.fireKick * 0.085 - this.meleeAnim * 0.3;
     rx += this.fireKick * 0.11;
+    ry += this.fireKick * (this._kickYaw || 0);
     rz += this.fireKick * (this._kickRoll || 0) * 0.12 - this.meleeAnim * 0.25;
 
     this.rig.position.set(px - swayY * 0.4, py + swayP * 0.3, pz);

@@ -50,6 +50,57 @@ const slay = (g, id) => { while (g.enemies.has(id)) g.onMessage('p1', { t: 'hit'
   ok('500 sigil rolls hold every pattern invariant');
 }
 
+// ---------- rally banner (LOBBY only) ----------
+{
+  const g = mkGame();
+  g.addPlayer('p1', 'Planter', 'gunslinger');
+  g.addPlayer('p2', 'Rallier', 'sentinel');
+
+  // interacting away from the marked circle plants nothing
+  moveTo(g, 'p1', [0, 0, 10]);
+  g.onMessage('p1', { t: 'interact' });
+  assert.equal(g.banner, null, 'no banner away from the circle');
+
+  // planting on the circle: banner set, broadcast event fired
+  moveTo(g, 'p1', ENC.banner.pos);
+  g.onMessage('p1', { t: 'interact' });
+  assert.ok(g.banner && g.banner.by === 'Planter', 'banner planted on the circle');
+  assert.ok(msgs.some(x => x.to === null && x.m.t === 'banner'), 'banner event broadcast');
+  g.broadcastSnapshot();
+  const snap = msgs.findLast(x => x.m.t === 'snap').m;
+  assert.deepEqual(snap.banner.p, ENC.banner.pos, 'snapshot carries the banner');
+
+  // each guardian rallies once — including the planter — and only once
+  msgs = [];
+  moveTo(g, 'p2', ENC.banner.pos);
+  g.onMessage('p2', { t: 'interact' });
+  assert.ok(msgs.some(x => x.to === 'p2' && x.m.t === 'restock'), 'rallying restocks');
+  msgs = [];
+  g.onMessage('p2', { t: 'interact' });
+  assert.ok(!msgs.some(x => x.m.t === 'restock'), 'rally is once per guardian');
+  g.onMessage('p1', { t: 'interact' });
+  assert.ok(msgs.some(x => x.to === 'p1' && x.m.t === 'restock'), 'the planter can rally too');
+
+  // once the encounter starts the banner goes inert
+  moveTo(g, 'p1', [0, 0, 1]); moveTo(g, 'p2', [0, 0, 1]);
+  advance(g, ENC.readyTime + 0.5);
+  assert.equal(g.enc.st, 'MECH');
+  god(g);
+  msgs = [];
+  const p2 = g.players.get('p2');
+  p2.restocked = false; // even un-restocked guardians get nothing mid-fight
+  moveTo(g, 'p2', ENC.banner.pos);
+  g.onMessage('p2', { t: 'interact' });
+  assert.ok(!msgs.some(x => x.m.t === 'restock'), 'no restock outside LOBBY');
+
+  // a wipe-style reset clears the banner and re-arms every guardian's rally
+  p2.restocked = true;
+  g.resetToLobby('wipe');
+  assert.equal(g.banner, null, 'reset clears the banner');
+  assert.ok([...g.players.values()].every(p => !p.restocked), 'rallies re-armed for the next lobby');
+  ok('rally banner: plant on the circle, one restock each, lobby-only');
+}
+
 // ---------- solo full clear ----------
 {
   const g = mkGame();
@@ -749,16 +800,35 @@ const slay = (g, id) => { while (g.enemies.has(id)) g.onMessage('p1', { t: 'hit'
   advance(g, 1.0);
   seekers().forEach((s, i) => assert.ok(d3t(s.pos, aim) < before[i] - 4, 'each missile closes at full speed'));
 
-  // shootable: ordinary hits pop one mid-flight, harmlessly (no seekerBoom)
+  // shootable: ordinary hits pop one mid-flight, harmlessly (no seekerBoom) —
+  // and the pop cooks off the wingman flying inside chainR (sympathetic chain)
   msgs.length = 0;
-  const downed = seekers()[0];
+  const [downed, wingman] = seekers();
+  wingman.pos = [downed.pos[0] + 2, downed.pos[1], downed.pos[2]]; // pin it inside chainR
   slay(g, downed.id);
   assert.ok(!g.enemies.has(downed.id), 'a seeker can be shot down');
   assert.ok(msgs.some(x => x.m.t === 'enemyDied' && x.m.ty === 'seeker'), 'shot-down seeker dies like an enemy');
-  assert.ok(!msgs.some(x => x.m.t === 'seekerBoom'), 'no detonation when shot down');
+  assert.ok(g.enemies.has(wingman.id), 'the cooked wingman holds through its fuse');
+  advance(g, ENEMIES.seeker.chainFuse + 0.1);
+  assert.ok(!g.enemies.has(wingman.id), 'the chain reaction claims the wingman');
+  assert.ok(!msgs.some(x => x.m.t === 'seekerBoom'), 'shot-down and chained pops are duds — no detonation');
+  assert.ok(!msgs.some(x => x.m.t === 'hurt' && x.m.src === 'seeker'), 'the chain wounds nobody');
 
-  // the survivor reaches its quarry and detonates on them
-  advance(g, 12);
+  // …but the chain reaches only chainR: a missile beyond it flies on to its
+  // quarry and detonates on them (positions seeded along the proven-clear
+  // corridor the salvo was already flying)
+  msgs.length = 0;
+  const base = [...downed.pos];
+  const bd = d3t(base, aim) || 1;
+  const dir = [(aim[0] - base[0]) / bd, (aim[1] - base[1]) / bd, (aim[2] - base[2]) / bd];
+  const off = ENEMIES.seeker.chainR + 2;
+  const near = g.spawnEnemy('seeker', [...base]);
+  const far = g.spawnEnemy('seeker', [base[0] + dir[0] * off, base[1] + dir[1] * off, base[2] + dir[2] * off]);
+  for (const s of [near, far]) { s.target = 'p1'; s.popUntil = 0; s.launchV = [0, 0, 0]; s.dieAt = g.t + 25; }
+  slay(g, near.id);
+  advance(g, ENEMIES.seeker.chainFuse + 0.1);
+  assert.ok(g.enemies.has(far.id), 'a missile beyond chainR is untouched');
+  advance(g, 11.5);
   assert.equal(seekers().length, 0, 'the survivor spent itself');
   assert.ok(msgs.some(x => x.m.t === 'seekerBoom'), 'detonation broadcast for the boom FX');
   assert.ok(msgs.some(x => x.m.t === 'hurt' && x.to === 'p1' && x.m.src === 'seeker'), 'the blast wounds the hunted');
@@ -786,7 +856,57 @@ const slay = (g, id) => { while (g.enemies.has(id)) g.onMessage('p1', { t: 'hit'
   advance(g, ENC.seekerFirst + 0.2);
   launch = msgs.filter(x => x.m.t === 'seekers').pop();
   assert.equal(launch.m.n, ENC.seekerBase + 3, 'final stand adds another');
-  ok('homing seekers: launch, hunt, shoot-down, terrain block, phase escalation');
+  ok('homing seekers: launch, hunt, shoot-down, chain reaction, terrain block, phase escalation');
+}
+
+// ---------- end-of-encounter scoreboard ----------
+{
+  const g = mkGame();
+  g.addPlayer('p1', 'Carry', 'gunslinger');
+  g.addPlayer('p2', 'Anchor', 'sentinel');
+  moveTo(g, 'p1', [0, 0, 1]); moveTo(g, 'p2', [1, 0, 1]);
+  advance(g, ENC.readyTime + 0.5);
+  god(g);
+  const p1 = g.players.get('p1'), p2 = g.players.get('p2');
+  assert.deepEqual(p1.stats, { kills: 0, bossDmg: 0, keepers: 0 }, 'the board starts clean');
+
+  // kills credit the killer; a keeper ticks the keeper column too
+  const husk = g.spawnEnemy('husk', [10, 0, 10]);
+  slay(g, husk.id);
+  const keeper = g.spawnEnemy('keeper', [12, 0, 12]);
+  slay(g, keeper.id);
+  assert.equal(p1.stats.kills, 2, 'both kills credited');
+  assert.equal(p1.stats.keepers, 1, 'the keeper counted separately');
+  assert.equal(p2.stats.kills, 0, 'the bystander earns nothing');
+
+  // boss damage scores only what lands: nothing while shielded, no overkill
+  g.onMessage('p1', { t: 'hit', target: 'boss', dmg: 200, weapon: 'sniper' });
+  assert.equal(p1.stats.bossDmg, 0, 'shielded hits score nothing');
+  g.enterDamage();
+  g.onMessage('p1', { t: 'hit', target: 'boss', dmg: 200, weapon: 'sniper' });
+  assert.equal(p1.stats.bossDmg, 200, 'landed boss damage scored');
+  g.enc.bossHp = 50;
+  g.onMessage('p2', { t: 'hit', target: 'boss', dmg: 200, weapon: 'sniper' });
+  assert.equal(p2.stats.bossDmg, 50, 'overkill past zero is not scored');
+  assert.equal(g.enc.st, 'VICTORY');
+  const died = msgs.findLast(x => x.m.t === 'bossDied').m;
+  assert.equal(died.stats.length, 2, 'one scoreboard row per guardian');
+  assert.equal(died.stats[0].name, 'Carry', 'sorted by boss damage');
+  assert.deepEqual(
+    [died.stats[0].kills, died.stats[0].dmg, died.stats[0].keepers, died.stats[1].dmg],
+    [2, 200, 1, 50], 'rows carry kills/dmg/keepers');
+
+  // the next encounter starts a fresh board; a wipe carries the board too
+  advance(g, ENC.victoryDelay + 0.5);
+  moveTo(g, 'p1', [0, 0, 1]); moveTo(g, 'p2', [1, 0, 1]);
+  advance(g, ENC.readyTime + 0.5);
+  assert.equal(g.enc.st, 'MECH');
+  assert.deepEqual(g.players.get('p1').stats, { kills: 0, bossDmg: 0, keepers: 0 },
+    'a new encounter wipes the board');
+  g.startWipe();
+  const wiped = msgs.findLast(x => x.m.t === 'wipe').m;
+  assert.equal(wiped.stats.length, 2, 'the wipe message carries the scoreboard');
+  ok('end-of-encounter scoreboard: credit, caps, sort, reset');
 }
 
 console.log('\nAll encounter tests passed.');

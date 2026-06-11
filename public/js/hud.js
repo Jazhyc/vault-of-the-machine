@@ -20,7 +20,7 @@ export class Hud {
       lootHead: $('lootHead'), lootName: $('lootName'), lootLore: $('lootLore'),
       help: $('help'), helpHint: $('helpHint'), reloadHint: $('reloadHint'),
       wslots: [$('w0'), $('w1'), $('w2')],
-      endScreen: $('endScreen'), endTitle: $('endTitle'), endSub: $('endSub'),
+      endScreen: $('endScreen'), endTitle: $('endTitle'), endSub: $('endSub'), endStats: $('endStats'),
       flash: $('flash'), goldenFrame: $('goldenFrame'),
       channel: $('channel'), channelLabel: $('channelLabel'), channelFill: $('channelFill'),
     };
@@ -113,7 +113,7 @@ export class Hud {
     this._lootTimer = setTimeout(() => this.el.loot.classList.add('hidden'), 5000);
   }
 
-  endScreen(kind) {
+  endScreen(kind, stats = null) {
     if (!kind) { this.el.endScreen.classList.add('hidden'); return; }
     this.el.endScreen.classList.remove('hidden');
     if (kind === 'win') {
@@ -124,6 +124,29 @@ export class Hud {
       this.el.endTitle.textContent = 'DARKNESS CONSUMED YOU';
       this.el.endTitle.className = 'title lose';
       this.el.endSub.textContent = 'THE ENCOUNTER RESETS...';
+    }
+    // fireteam scoreboard — the server sends it (sorted) with wipe/bossDied
+    this.el.endStats.classList.toggle('hidden', !stats || !stats.length);
+    this.el.endStats.innerHTML = '';
+    if (!stats || !stats.length) return;
+    const mkRow = (cells, cls = '') => {
+      const row = document.createElement('div');
+      row.className = `srow ${cls}`;
+      cells.forEach(([text, color], i) => {
+        const span = document.createElement('span');
+        if (i > 0) span.className = 'sval';
+        span.textContent = text; // textContent: guardian names are player input
+        if (color) span.style.color = color;
+        row.appendChild(span);
+      });
+      this.el.endStats.appendChild(row);
+    };
+    mkRow([['GUARDIAN'], ['KILLS'], ['BOSS DMG'], ['KEEPERS']], 'head');
+    for (const s of stats) {
+      mkRow([
+        [s.name, CLASSES[s.cls]?.color],
+        [String(s.kills)], [s.dmg.toLocaleString('en-US')], [String(s.keepers)],
+      ]);
     }
   }
 

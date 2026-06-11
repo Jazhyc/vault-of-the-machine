@@ -32,6 +32,7 @@ export class Game {
     this.caps = new Map();        // antiviral capsules raining during damage phase
     this.keys = new Map();        // auric keys dropped by burst blisters
     this.chest = null;
+    this.banner = null;           // rally banner { p, by } — planted in LOBBY, gone on reset
     this.enc = {
       st: 'LOBBY', round: 1, ends: 0, ready: 0,
       bossHp: 0, bossMax: 0, shield: true, bossDead: false,
@@ -63,6 +64,7 @@ export class Game {
       p.goldenUntil = 0;
       p.pendingNova = false; p.revive = null; p.looted = false;
       p.antiviral = 0; p.hasKey = false; p.wardUntil = 0;
+      p.restocked = false; // the next lobby's banner blesses everyone afresh
       p.pos = [...ARENA.spawn];
     }
     this.send(null, { t: 'reset', reason });
@@ -78,7 +80,8 @@ export class Game {
       sup: 0, goldenUntil: 0, pendingNova: false,
       antiviral: 0, hasKey: false, wardUntil: 0,
       vel: [0, 0, 0], lastStateAt: -1,
-      revive: null, looted: false, lastExp: {},
+      revive: null, looted: false, restocked: false, lastExp: {},
+      stats: { kills: 0, bossDmg: 0, keepers: 0 },
     };
     this.players.set(id, p);
     this.toast(`${p.name} has joined the fireteam`, 'info');
@@ -233,6 +236,23 @@ export class Game {
         return;
       }
     }
+    // Rally banner — LOBBY only. First interact on the marked circle plants it;
+    // after that, each guardian can rally at it once (the restock itself is
+    // client-side: ammo and cooldowns live in WeaponSystem).
+    if (this.enc.st === 'LOBBY') {
+      const B = ENC.banner;
+      if (!this.banner && dxz(p.pos, B.pos) < B.placeR) {
+        this.banner = { p: [...B.pos], by: p.name };
+        this.send(null, { t: 'banner', p: this.banner.p, by: p.name });
+        this.toast(`${p.name} plants the fireteam standard — rally to it and gird yourselves.`, 'good');
+        return;
+      }
+      if (this.banner && !p.restocked && dxz(p.pos, this.banner.p) < B.restockR) {
+        p.restocked = true;
+        this.send(p.id, { t: 'restock' });
+        return;
+      }
+    }
     // Loot the chest — the raid exotic is always Gjallarhorn, and it belongs
     // only to the guardians who actually claim it from the cache.
     if (this.chest && !p.looted && dxz(p.pos, this.chest.p) < PLAYER.interactRange + 0.5) {
@@ -279,13 +299,20 @@ export class Game {
     if (this.players.size > 0 && this.alivePlayers().length === 0) this.startWipe();
   }
 
+  // End-of-encounter scoreboard, best boss damage first.
+  encStats() {
+    return [...this.players.values()]
+      .map(p => ({ name: p.name, cls: p.cls, kills: p.stats.kills, dmg: Math.round(p.stats.bossDmg), keepers: p.stats.keepers }))
+      .sort((a, b) => b.dmg - a.dmg || b.kills - a.kills);
+  }
+
   startWipe() {
     for (const p of this.players.values()) { p.downed = false; p.dead = true; }
     this.enc.st = 'WIPE'; this.enc.ends = this.t + ENC.wipeDelay;
     this.enc.sweep = null; this.enc.barrageUntil = 0;
     this.enc.wormhole = false; this.enc.stage = null;
     this.endViralPhase();
-    this.send(null, { t: 'wipe' });
+    this.send(null, { t: 'wipe', stats: this.encStats() });
     this.toast('Darkness consumes your fireteam...', 'boss');
   }
 
@@ -297,6 +324,7 @@ export class Game {
     this.enc.bossHp = this.enc.bossMax;
     this.enc.shield = true; this.enc.final = false; this.enc.bossDead = false;
     this.enc.round = 1;
+    for (const p of this.players.values()) p.stats = { kills: 0, bossDmg: 0, keepers: 0 };
     this.spawnBlisters(); // they fester on its back for the whole encounter
     this.send(null, { t: 'bossWake' });
     this.toast(`${ENC.bossName} awakens!`, 'boss');
@@ -437,6 +465,7 @@ export class Game {
   applyBossDamage(dmg, p) {
     const e = this.enc;
     if (e.shield || e.bossDead || e.st === 'LOBBY') return false;
+    if (p) p.stats.bossDmg += Math.min(dmg, e.bossHp); // overkill past 0 earns nothing
     e.bossHp = Math.max(0, e.bossHp - dmg);
     if (p && p.goldenUntil <= this.t) this.gainSuper(p, dmg * SUPER.perDamage);
     if (e.bossHp <= 0) this.victory(p);
@@ -550,7 +579,7 @@ export class Game {
     for (const q of this.players.values()) {
       if (q.downed || q.dead) { q.downed = false; q.dead = false; q.hp = PLAYER.maxHp / 2; }
     }
-    this.send(null, { t: 'bossDied' });
+    this.send(null, { t: 'bossDied', stats: this.encStats() });
     this.toast('VAULTHUR HAS FALLEN. The vault cache is yours.', 'good');
   }
 
@@ -577,7 +606,11 @@ export class Game {
 
   killEnemy(e, killer) {
     this.enemies.delete(e.id);
-    if (killer) this.gainSuper(killer, SUPER.perKill);
+    if (killer) {
+      this.gainSuper(killer, SUPER.perKill);
+      killer.stats.kills++;
+      if (e.type === 'keeper') killer.stats.keepers++;
+    }
     // Wisps die with the Keeper they guard.
     if (e.type === 'keeper') {
       for (const w of [...this.enemies.values()]) {
@@ -590,6 +623,25 @@ export class Game {
       this.keys.set(nid(), { p: [Math.sin(ang) * ENC.keyDropR, 0, Math.cos(ang) * ENC.keyDropR] });
       if (killer) killer.antiviral = 0;
       this.toast('A Viral Blister bursts — an AURIC KEY clatters to the arena floor.', 'good');
+    }
+    // A destroyed seeker cooks off the salvo around it: chainDmg to every
+    // seeker within chainR, each popping a chainFuse later (the stagger makes
+    // the ripple readable and keeps the client die-sfx burst-throttle happy).
+    // Cooked pops route back through killEnemy, so the chain propagates and
+    // credits the instigator's super. detonateSeeker (player/terrain/expiry
+    // booms) deliberately does NOT chain — converging missiles would defuse
+    // each other on the first impact and gut the salvo's pressure.
+    if (e.type === 'seeker') {
+      const def = ENEMIES.seeker;
+      for (const s of this.enemies.values()) {
+        if (s.type !== 'seeker' || s.cookAt) continue;
+        if (d3(s.pos, e.pos) > def.chainR) continue;
+        s.hp -= def.chainDmg;
+        if (s.hp <= 0) {
+          s.cookAt = this.t + def.chainFuse;
+          s.cookBy = (killer && killer.id) || e.cookBy || null;
+        }
+      }
     }
     // Ammo drops.
     const drops = [];
@@ -822,6 +874,12 @@ export class Game {
 
   tickSeeker(e, dt) {
     const def = ENEMIES.seeker;
+    // sympathetic detonation lands: pops like a shot-down seeker (a dud to
+    // players — no blast), which chains onward through killEnemy
+    if (e.cookAt && this.t >= e.cookAt) {
+      this.killEnemy(e, e.cookBy ? this.players.get(e.cookBy) : null);
+      return;
+    }
     if (this.t < e.popUntil) {
       // launch arc: up and away from the hull before the homing head wakes
       e.pos[0] += e.launchV[0] * dt; e.pos[1] += e.launchV[1] * dt; e.pos[2] += e.launchV[2] * dt;
@@ -1205,7 +1263,9 @@ export class Game {
         // state, and which codes have been answered
         sig: sig ? { c: sig.colors, o: sig.owners, s: sig.segs, g: sig.grid, m: sig.matched } : null,
         sweep: e.sweep ? {
-          a1: Math.round(e.sweep.a1 * 100) / 100, a2: Math.round(e.sweep.a2 * 100) / 100,
+          // w1/w2 let clients extrapolate the beams between 10 Hz snapshots
+          a1: Math.round(e.sweep.a1 * 1000) / 1000, a2: Math.round(e.sweep.a2 * 1000) / 1000,
+          w1: e.sweep.w1, w2: e.sweep.w2,
           on: this.t >= e.sweep.armAt,
         } : null,
       },
@@ -1233,6 +1293,7 @@ export class Game {
       keys: [...this.keys.entries()].map(([id, k]) => ({ id, p: k.p })),
       wells: [...this.wells.entries()].map(([id, w]) => ({ id, p: w.p, r: w.r, k: w.kind })),
       chest: this.chest,
+      banner: this.banner,
     };
     this.send(null, snap);
   }

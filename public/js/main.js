@@ -212,6 +212,7 @@ function showLoadoutScreen(afterVictory) {
 // ---------- game state ----------
 let player = null, weapons = null, entities = null;
 let snap = null, serverOffset = 0, prevSt = 'LOBBY', prevSup = 0, joined = false;
+let bannerRallied = false; // this lobby's banner already restocked me
 let prevHp = PLAYER.maxHp, lowHpCueAt = 0;
 const remoteProjs = [];
 
@@ -403,6 +404,14 @@ net.on('hurt', (m) => {
   if (m.imp && player) player.impulse(m.imp);
 });
 net.on('ammo', (m) => { if (weapons) weapons.addAmmo(m.kind); });
+// rally banner: restock state is client-side (ammo/cooldowns live in WeaponSystem);
+// bannerRallied gates the prompt so it stops offering a rally you've already taken
+net.on('banner', (m) => audio.bannerPlant(volAt(m.p)));
+net.on('restock', () => {
+  bannerRallied = true;
+  if (weapons) weapons.restock();
+  hud.toast('The standard\'s light fills your reserves — your arms sit heavy and ready.', 'good');
+});
 net.on('down', () => audio.down());
 net.on('revived', () => audio.revive());
 net.on('shieldBreak', () => { audio.roar(); effects.shake(0.5); });
@@ -485,22 +494,23 @@ net.on('missile', () => {
   effects.explosion(new THREE.Vector3(ENC.bossPos[0], ENC.bossPos[1], ENC.bossPos[2]), 'nova');
   audio.explosion(true);
 });
-// boss seekers: launch whoosh off the back, and a boom wherever one lands
+// boss seekers: salvo launch off the back, and a boom wherever one lands
 // (shot-down seekers pop via the regular enemyDied path instead)
-net.on('seekers', () => audio.volley());
+net.on('seekers', (m) => audio.seekerLaunch(m.n, volAt(ENC.bossPos)));
 net.on('seekerBoom', (m) => {
   effects.explosion(new THREE.Vector3(m.p[0], m.p[1], m.p[2]), 'seeker');
-  audio.explosion(false);
+  audio.explosion(false, volAt(m.p));
 });
-net.on('bossDied', () => {
+net.on('bossDied', (m) => {
   audio.victory();
   hud.announce('RAID COMPLETE', 'OPEN THE VAULT CACHE');
-  setTimeout(() => { if (getEnc()?.st === 'VICTORY') hud.endScreen('win'); }, 2500);
+  setTimeout(() => { if (getEnc()?.st === 'VICTORY') hud.endScreen('win', m.stats); }, 2500);
   setTimeout(() => hud.endScreen(null), 8000);
 });
-net.on('wipe', () => { audio.wipe(); hud.endScreen('lose'); });
+net.on('wipe', (m) => { audio.wipe(); hud.endScreen('lose', m.stats); });
 net.on('reset', (m) => {
   hud.endScreen(null);
+  bannerRallied = false; // fresh lobby, fresh banner
   if (player) player.teleportToSpawn();
   audio.intensity(0);
   audio.setMusic('calm', 1);
@@ -541,6 +551,16 @@ function updatePrompt() {
   if (snap.chest && dist2(snap.chest.p) < PLAYER.interactRange + 0.5) {
     hud.prompt('PRESS <b>E</b> — OPEN THE VAULT CACHE');
     return;
+  }
+  if (snap.enc.st === 'LOBBY') {
+    if (!snap.banner && dist2(ENC.banner.pos) < ENC.banner.placeR) {
+      hud.prompt('PRESS <b>E</b> — PLANT THE FIRETEAM STANDARD');
+      return;
+    }
+    if (snap.banner && !bannerRallied && dist2(snap.banner.p) < ENC.banner.restockR) {
+      hud.prompt('PRESS <b>E</b> — RALLY AT THE STANDARD');
+      return;
+    }
   }
   if (snap.enc.st === 'LOBBY' && dist2([0, 0, 0]) > ENC.readyRadius) {
     hud.prompt(`STAND ON THE CENTER PLATE TO BEGIN <b>(${snap.players.length} GUARDIAN${snap.players.length > 1 ? 'S' : ''})</b>`);
@@ -657,7 +677,24 @@ function loop() {
     for (const c of capsTracked.values()) {
       if (!c.landed && serverNow() >= c.land) { c.landed = true; audio.capsuleLand(volAt(c.p)); }
     }
-  }
+
+    // incoming-ordnance whine: tracks the nearest live seeker — pitch and
+    // volume climb as it closes, panned toward it (one persistent loop node
+    // in audio.js, gain 0 when none are airborne)
+    let seekNear = 0, seekPan = 0;
+    for (const v of enemies.views.values()) {
+      if (v.ty !== 'seeker') continue;
+      const wp = v.group.position;
+      const dx = wp.x - player.pos.x, dz = wp.z - player.pos.z;
+      const d = Math.hypot(dx, wp.y - (player.pos.y + 1.2), dz);
+      const c = Math.max(0, 1 - d / 26);
+      if (c > seekNear) {
+        seekNear = c;
+        seekPan = d > 1 ? (dx * Math.cos(player.yaw) - dz * Math.sin(player.yaw)) / d : 0;
+      }
+    }
+    audio.seekerWhine(seekNear, seekPan);
+  } else audio.seekerWhine(0); // back in the lobby/dead reset: silence the loop
   mark('sim');
 
   if (lobbyVisible) {
@@ -670,3 +707,18 @@ function loop() {
   mark('render');
 }
 loop();
+
+// ---------- loading veil release ----------
+// #loadScreen (static HTML, painted before this module evaluates) covers the
+// dead window where the lobby is visible but inert: module fetch/parse plus
+// the warmup frame above. Lift it only after the first live frame has drawn
+// beneath it, and never before the minimum hold — a sub-second flash of a
+// loading screen reads as a glitch, not a load.
+{
+  const veil = $('loadScreen');
+  const MIN_HOLD_MS = 1400; // measured from navigation start (performance.now origin)
+  requestAnimationFrame(() => setTimeout(() => {
+    veil.classList.add('out');
+    setTimeout(() => veil.classList.add('hidden'), 800); // past the .7s opacity transition
+  }, Math.max(0, MIN_HOLD_MS - performance.now())));
+}

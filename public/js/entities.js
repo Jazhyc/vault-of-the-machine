@@ -7,14 +7,22 @@ import { Interp } from './enemies.js';
 const noRay = (o) => { o.raycast = () => {}; return o; };
 
 function makeNameTag(name, color) {
+  // The lobby showcase puts this sprite a few meters from the camera, where it
+  // spans most of the screen — raster it large enough for that, not just for
+  // in-arena distances (256px across 3.4 m read visibly blurry up close).
   const c = document.createElement('canvas');
-  c.width = 256; c.height = 48;
+  c.width = 1024; c.height = 192;
   const g = c.getContext('2d');
-  g.font = '600 26px "Segoe UI", Arial';
+  g.font = '600 104px "Segoe UI", Arial';
   g.textAlign = 'center';
+  g.textBaseline = 'middle';
   g.fillStyle = color;
-  g.shadowColor = 'black'; g.shadowBlur = 6;
-  g.fillText(name.toUpperCase(), 128, 32);
+  g.strokeStyle = 'rgba(0,0,0,0.85)';
+  g.lineWidth = 10;
+  g.lineJoin = 'round';
+  const label = name.toUpperCase();
+  g.strokeText(label, 512, 104, 960);
+  g.fillText(label, 512, 104, 960);
   const spr = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), depthTest: false, transparent: true }));
   spr.scale.set(3.4, 0.64, 1);
   return noRay(spr);
@@ -119,6 +127,16 @@ const KEY_HALO_GEO = new THREE.SphereGeometry(0.65, 12, 10);
 const KEY_HALO_MAT = new THREE.MeshBasicMaterial({ color: 0xffb703, transparent: true, opacity: 0.18, depthWrite: false });
 const DOME_GEO = new THREE.SphereGeometry(1, 24, 16, 0, Math.PI * 2, 0, Math.PI / 2);
 const WELL_RING_GEO = new THREE.RingGeometry(0.955, 1, 40).rotateX(-Math.PI / 2);
+// rally banner: pole + crossbar + hanging cloth, and the white placement circle
+const BANNER_POLE_GEO = new THREE.CylinderGeometry(0.05, 0.08, 3.6, 8);
+const BANNER_ARM_GEO = new THREE.CylinderGeometry(0.035, 0.035, 1.2, 6).rotateZ(Math.PI / 2);
+const BANNER_TOP_GEO = new THREE.OctahedronGeometry(0.14);
+const BANNER_CLOTH_GEO = new THREE.PlaneGeometry(1.0, 1.7);
+const BANNER_POLE_MAT = new THREE.MeshStandardMaterial({ color: 0x2a2a38, roughness: 0.35, metalness: 0.75 });
+const BANNER_TOP_MAT = new THREE.MeshBasicMaterial({ color: 0xf0e9d8 });
+const BANNER_CLOTH_MAT = new THREE.MeshStandardMaterial({ color: 0xe8e2d2, roughness: 0.9, metalness: 0,
+  emissive: 0xe8e2d2, emissiveIntensity: 0.12, side: THREE.DoubleSide });
+const BANNER_SPOT_MAT = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.55, depthWrite: false });
 const WELL_MATS = {
   ward: {
     dome: new THREE.MeshBasicMaterial({ color: 0x4cc9f0, transparent: true, opacity: 0.16, side: THREE.DoubleSide, depthWrite: false }),
@@ -147,7 +165,26 @@ export function buildEntityWarmup() {
   g.add(new THREE.Mesh(DOME_GEO, WELL_MATS.refuge.dome));
   g.add(new THREE.Mesh(WELL_RING_GEO, WELL_MATS.ward.ring));
   g.add(new THREE.Mesh(WELL_RING_GEO, WELL_MATS.refuge.ring));
+  g.add(new THREE.Mesh(BANNER_POLE_GEO, BANNER_POLE_MAT));
+  g.add(new THREE.Mesh(BANNER_ARM_GEO, BANNER_POLE_MAT));
+  g.add(new THREE.Mesh(BANNER_TOP_GEO, BANNER_TOP_MAT));
+  g.add(new THREE.Mesh(BANNER_CLOTH_GEO, BANNER_CLOTH_MAT));
+  g.add(new THREE.Mesh(WELL_RING_GEO, BANNER_SPOT_MAT));
   return g;
+}
+
+function buildBanner() {
+  const grp = new THREE.Group();
+  const pole = noRay(new THREE.Mesh(BANNER_POLE_GEO, BANNER_POLE_MAT));
+  pole.position.y = 1.8;
+  const arm = noRay(new THREE.Mesh(BANNER_ARM_GEO, BANNER_POLE_MAT));
+  arm.position.set(0.55, 3.45, 0);
+  const finial = noRay(new THREE.Mesh(BANNER_TOP_GEO, BANNER_TOP_MAT));
+  finial.position.y = 3.75;
+  const cloth = noRay(new THREE.Mesh(BANNER_CLOTH_GEO, BANNER_CLOTH_MAT));
+  cloth.position.set(0.62, 2.55, 0);
+  grp.add(pole, arm, finial, cloth);
+  return { grp, cloth };
 }
 
 export class EntityManager {
@@ -162,6 +199,14 @@ export class EntityManager {
     this.capsules = new Map();
     this.keyDrops = new Map();
     this.chestMesh = null;
+    this.banner = null;
+    // white circle marking where the rally banner can be planted; lives in the
+    // scene permanently, shown only while LOBBY runs without a banner
+    this.bannerSpot = noRay(new THREE.Mesh(WELL_RING_GEO, BANNER_SPOT_MAT));
+    this.bannerSpot.scale.setScalar(ENC.banner.placeR);
+    this.bannerSpot.position.set(ENC.banner.pos[0], 0.04, ENC.banner.pos[2]);
+    this.bannerSpot.visible = false;
+    scene.add(this.bannerSpot);
     this.t = 0;
     this.lastSnapAt = 0;
   }
@@ -265,6 +310,17 @@ export class EntityManager {
       this.scene.remove(this.chestMesh);
       this.chestMesh = null;
     }
+
+    // --- rally banner + its placement circle ---
+    this.bannerSpot.visible = snap.enc.st === 'LOBBY' && !snap.banner;
+    if (snap.banner && !this.banner) {
+      this.banner = buildBanner();
+      this.banner.grp.position.set(...snap.banner.p);
+      this.scene.add(this.banner.grp);
+    } else if (!snap.banner && this.banner) {
+      this.scene.remove(this.banner.grp);
+      this.banner = null;
+    }
   }
 
   syncSet(map, list, create, apply) {
@@ -337,6 +393,8 @@ export class EntityManager {
       v.mesh.rotation.y += dt * 2.2;
     }
     if (this.chestMesh) this.chestMesh.rotation.y += dt * 0.5;
+    if (this.bannerSpot.visible) this.bannerSpot.material.opacity = 0.4 + Math.sin(this.t * 2.5) * 0.18;
+    if (this.banner) this.banner.cloth.rotation.y = Math.sin(this.t * 1.7) * 0.12; // lazy flutter
   }
 
   // Golden buff timestamps are server-time; we just trust the flag while the

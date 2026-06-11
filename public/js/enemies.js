@@ -66,6 +66,22 @@ const GEO = {
   seekerNose: new THREE.ConeGeometry(0.17, 0.4, 6).rotateX(Math.PI / 2),
   seekerFin: new THREE.BoxGeometry(0.05, 0.42, 0.3),
   seekerFlame: new THREE.ConeGeometry(0.12, 0.55, 6).rotateX(-Math.PI / 2),
+  // exhaust plume: vertex colors fade ember→black down the cone; with additive
+  // blending black IS transparent (floor-grid trick), so no texture needed.
+  // Base sits at z=0, tail tip at z=-2.4 (scale.z flicker stretches aft only).
+  seekerTrail: (() => {
+    const len = 2.4;
+    const g = new THREE.ConeGeometry(0.15, len, 6, 6, true)
+      .rotateX(-Math.PI / 2).translate(0, 0, -len / 2);
+    const pos = g.attributes.position;
+    const col = new Float32Array(pos.count * 3);
+    for (let i = 0; i < pos.count; i++) {
+      const k = Math.max(0, 1 + pos.getZ(i) / len) ** 2; // 1 at engine → 0 at tip
+      col[i * 3] = k; col[i * 3 + 1] = 0.55 * k; col[i * 3 + 2] = 0.2 * k;
+    }
+    g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    return g;
+  })(),
   // blister
   blisterSac: new THREE.SphereGeometry(1.0, 14, 12),
   blisterPustule: new THREE.SphereGeometry(0.3, 8, 8),
@@ -97,6 +113,7 @@ const MAT = {
   seeker: new THREE.MeshStandardMaterial({ color: 0x3a2255, roughness: 0.4, metalness: 0.6 }),
   seekerNose: new THREE.MeshStandardMaterial({ color: 0x2a1020, emissive: 0xff5d2e, emissiveIntensity: 0.9, roughness: 0.4 }),
   seekerFlame: new THREE.MeshBasicMaterial({ color: 0xffaa33, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false }),
+  seekerTrail: new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }),
   // shared across all blisters; the empowered pulse animates them in unison
   blister: new THREE.MeshStandardMaterial({ color: 0x44521c, roughness: 0.35, emissive: 0x86e63c, emissiveIntensity: 0.35 }),
   blisterPustule: new THREE.MeshStandardMaterial({ color: 0x53631f, roughness: 0.3, emissive: 0x9aff3c, emissiveIntensity: 0.5 }),
@@ -262,7 +279,11 @@ function buildSeeker() {
   const flame = noRay(new THREE.Mesh(GEO.seekerFlame, MAT.seekerFlame));
   flame.position.z = -0.66;
   g.add(flame);
-  g.userData.anim = { flame, phase: Math.random() * Math.PI * 2 };
+  const trail = noRay(new THREE.Mesh(GEO.seekerTrail, MAT.seekerTrail));
+  trail.position.z = -0.55;
+  g.add(trail);
+  g.userData.anim = { flame, trail, phase: Math.random() * Math.PI * 2 };
+  g.scale.setScalar(3); // reads as real ordnance, not a dart — and shoot-downable at range
   return g;
 }
 
@@ -442,6 +463,7 @@ export class EnemyManager {
       if (!seen.has(id)) this.removeView(id, v);
     }
     this.enc = snap.enc;
+    this.encAt = now; // arrival time — base for sweep-beam angle extrapolation
   }
 
   removeView(id, v) {
@@ -493,7 +515,10 @@ export class EnemyManager {
           _dir.set(B.p[0] - A.p[0], B.p[1] - A.p[1], B.p[2] - A.p[2]);
           if (_dir.lengthSq() > 1e-6) v.group.quaternion.setFromUnitVectors(_Z, _dir.normalize());
         }
-        if (a) a.flame.scale.setScalar(0.75 + Math.sin(this.t * 30 + a.phase) * 0.3);
+        if (a) {
+          a.flame.scale.setScalar(0.75 + Math.sin(this.t * 30 + a.phase) * 0.3);
+          a.trail.scale.z = 0.85 + Math.sin(this.t * 21 + a.phase) * 0.18;
+        }
         continue;
       }
       v.group.rotation.y = s.yaw;
@@ -531,9 +556,12 @@ export class EnemyManager {
     // sweep beams (rotation.y = -angle maps the server's atan2(z,x) convention)
     const sw = enc.sweep;
     if (sw) {
+      // raw snapshot angles step at 10 Hz; glide them by extrapolating with the
+      // server's constant per-sweep angular velocities at the shared render delay
+      const ext = renderTime - this.encAt;
       this.beams[0].visible = this.beams[1].visible = true;
-      this.beams[0].rotation.y = -sw.a1;
-      this.beams[1].rotation.y = -sw.a2;
+      this.beams[0].rotation.y = -(sw.a1 + (sw.w1 || 0) * ext);
+      this.beams[1].rotation.y = -(sw.a2 + (sw.w2 || 0) * ext);
       this.beamMat.opacity = sw.on ? 0.75 : 0.15 + (Math.sin(this.t * 12) + 1) * 0.1;
       this.beamMat.color.set(sw.on ? 0xff3d5e : 0xffb3c0);
     } else if (this.beams[0].visible) {

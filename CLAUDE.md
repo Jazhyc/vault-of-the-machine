@@ -46,13 +46,16 @@ Hit detection is client-side: the client raycasts and sends `hit {target, dmg, w
 applies it but clamps via `DMG_CAPS` (per trigger-pull; golden multiplies the cap), gates Nova
 behind `pendingNova` set by a validated `superCast`, and rate-limits `explode` kinds. Any new
 damage path needs a cap or validation server-side, and ideally a test like the existing
-"anti-cheat caps & nova gating" block.
+"anti-cheat caps & nova gating" block. Damage falloff is client-side: a weapon with
+`WEAPONS[k].falloff {start, min}` (currently shotgun only) scales hitscan damage in `fireHitscan`
+from full inside `start` m linearly down to `min`× at `range`; its `DMG_CAPS` entry covers the
+point-blank maximum.
 
 Protocol: JSON over one ws connection. Snapshots broadcast at 10 Hz (`broadcastSnapshot`); clients
 interpolate remote entities ~130 ms behind arrival time (`Interp` in `enemies.js`). One-shot events
 (`pf` fire relay, `explosion`, `super`, `sweep`, `bossFocus`, `capsule`, `keyGet`, `wellWake`,
 `sigilNode`, `sigilMatch`, `sigilBlast`, `heraldRise`, `wardBuff` (private), `wardBlast`,
-`wormhole`, `missile`, `seekers`, `seekerBoom`, …) are separate
+`wormhole`, `missile`, `seekers`, `seekerBoom`, `banner`, `restock` (private), …) are separate
 messages; a broadcast with `exclude: playerId` skips the sender (stripped in `server/main.js`).
 Client→server: `state`, `fire`, `hit`, `explode`, `superCast`, `interact`, `loadout`, and
 `sigil {i}` (toggle sky-lattice node i; validated st/stage/index server-side). Snapshot player
@@ -61,12 +64,21 @@ fields are abbreviated: `p` pos, `dn` downed, `dd` dead, `gu` goldenUntil, `av` 
 player id (DAMAGE only) and `enc.bossYaw` is the server-owned boss facing (clients lerp to it —
 every client must see the same back side); `enc.stage` is the MECH sub-stage, `enc.wh/mAt` the
 wormhole flag and missile-impact time, and `enc.sig` the round's sigil layout (`c` colors, `o`
-pillar owners, `s` pillar segments, `g` 9-bit lattice mask, `m` matched flags). Keeper enemies
+pillar owners, `s` pillar segments, `g` 9-bit lattice mask, `m` matched flags). `enc.sweep`
+carries `a1/a2/w1/w2/on` — the constant angular velocities let the client extrapolate the beam
+angles per frame from snapshot-arrival time (`encAt`), so the beams glide instead of stepping
+at 10 Hz. Keeper enemies
 carry `cl` (pedestal-color index) and `sh` (warded); the herald adds `shp/smh` (ward HP/max —
 the client keeper bar shows the ward in ward-color while it holds). `caps` (with `land`
 server-time) and `keys`
-are id-keyed pickup lists like `bricks`. Timers in snapshots are absolute server seconds; the
-client keeps `serverOffset` from `snap.now`.
+are id-keyed pickup lists like `bricks`; `banner` is a one-off object like `chest`. Timers in
+snapshots are absolute server seconds; the client keeps `serverOffset` from `snap.now`.
+
+The `bossDied` and `wipe` events carry a per-player `stats` scoreboard — `{name, cls, kills, dmg,
+keepers}`, sorted by boss damage server-side — rendered as the `#endStats` table on the end screen
+(`hud.endScreen(kind, stats)`). The server tracks `p.stats`: `killEnemy` credits kills/keepers,
+`applyBossDamage` credits only damage that actually lands (nothing while shielded, no overkill
+past 0), and `startEncounter` resets the board for everyone.
 
 Player-facing text (toasts/announcements) is flavor-first by explicit user preference: hint
 through fiction ("the blisters quiver"), never bare instructions ("shoot the blisters"). Status
@@ -75,7 +87,14 @@ readouts (lock names, code counts, timers) stay.
 ### Encounter state machine (server)
 
 `LOBBY → MECH (sigil mechanic, below) → DAMAGE (25s) → OBLIT → MECH round+1 … → FINAL (≤25% HP,
-notched on the boss bar) → VICTORY | WIPE`. MECH runs the **sky-sigil mechanic** through
+notched on the boss bar) → VICTORY | WIPE`. LOBBY has the **rally banner** (`ENC.banner`): the
+white circle near spawn (always-in-scene ring in `EntityManager`, visible only while LOBBY runs
+bannerless) takes an `interact` to plant `game.banner`, then each guardian's `interact` within
+`restockR` earns ONE private `restock` (`p.restocked`, re-armed in `resetToLobby`) — the actual
+refill is client-side (`WeaponSystem.restock()`: full mags, reserves to `maxReserves`,
+grenade/melee cooldowns cleared; `bannerRallied` in `main.js` gates the prompt). Everything is
+LOBBY-gated server-side; the banner object itself dies with `resetWorld`. MECH runs the
+**sky-sigil mechanic** through
 `enc.stage`: `null` (keepers stirring, `firstKeeperDelay`) → `KEEPERS` → `HUNT` → `FINAL` →
 `MISSILE`. Each round `rollSigil()` deals the three pedestal colors out as [twin A, twin B,
 herald] and splits the six pillars 3/3 between the twins, each pillar showing one straight 2-3
@@ -121,10 +140,15 @@ given the 1.8 m combined hit radius). Volley cadence tightens per phase
 90) so the whole shoot-down path is free: client raycast hits, `DMG_CAPS`, damage numbers, crit
 warhead nose — but deliberately NO hp bar (bars are keeper-only; it reads as ordnance). Each
 missile climbs a `seekerPop` launch arc, then `tickSeeker` homes on its assigned player's chest
-with perfect accuracy at `speed` 6.5 (< walk — kitable, so `seekerLife` expires stragglers).
+with perfect accuracy at `speed` 8.5 (walk 8 < seeker < sprint 12.5 — walking can't escape one,
+sprinting can, and `seekerLife` expires the ones a sprinter strings along).
 Detonation (`detonateSeeker` → `seekerBoom` broadcast: reached ANY player within 1 m, pillar,
 arena wall, floor, or expiry) splashes `dmg` in `blastR`; shot-down seekers go through `killEnemy`
-(normal `enemyDied`, no blast, no ammo drops). Seekers are excluded from the wave add-cap count
+(normal `enemyDied`, no blast, no ammo drops) and **chain**: the kill deals `chainDmg` to every
+seeker within `chainR`, each cooked one popping `chainFuse` later via the same harmless
+`killEnemy` path (`cookAt/cookBy` on the enemy — the instigator keeps earning `perKill` super
+down the chain). Detonations on players/terrain deliberately do NOT chain: converging missiles
+would defuse each other on the first impact. Seekers are excluded from the wave add-cap count
 and the separation pass, and splash height checks use their real y (like blisters — mirrored in
 weapons.js). Client: `buildSeeker` view orients along the interp flight delta (yaw alone can't
 pitch); the toast fires once per encounter (`enc.seekerSeen`).
@@ -215,9 +239,22 @@ Standing rules derived from the above:
   texels/m and reads blurry up close; use geometry.
 - Glowing set dressing must stay **dimmer than gameplay objects** (projectiles, pickups) — the
   floor grid has a single `BRIGHT` knob in `buildFloorGrid`.
+- **Boot loading veil**: `#loadScreen` (static HTML in index.html, z-index 100) covers the window
+  where the lobby is visible but inert (module fetch/parse + the warmup frame). Its spinner is
+  transform/opacity-only CSS so the compositor animates it while module evaluation blocks the main
+  thread. The release block at the bottom of `main.js` lifts it after the first live frame and a
+  1.4 s minimum hold; an inline fallback script swaps the status text if it's still up at 15 s
+  (module graph died).
 - **Snapshot-driven UI values step at 10 Hz** — bridge them with a CSS `transition` on the bar
   fill (ready bar `.12s linear`, boss bar `.25s`) instead of per-frame JS smoothing. Client-side
   timers (super ring, revive channel) don't need it.
+- **Weapon recoil is pattern-driven**: `WEAPONS[key].recoil` (shared/constants.js) is a per-shot
+  list of `[up, right]` steps in multiples of `kick`; `WeaponSystem.applyRecoil` walks it (index
+  resets on a fire pause or weapon switch; past the end it holds the last step + horizontal
+  wander) and feeds `player.kick(p, y)` — a two-stage camera offset in player.js (kick raises a
+  target the camera chases; the target eases back to zero), so sustained fire visibly climbs the
+  pattern. Recoil tilts the camera (and thus `aimDir`) but is client-feel only — the server never
+  sees it.
 - Raycast targets live in the shared `targets` array (world colliders + enemy roots + boss
   body/core). Decorative meshes either stay out of `targets` or get `raycast = () => {}` (`noRay`).
   Hit entities resolve by walking up to `userData.ent`; crit zones are meshes with
@@ -243,9 +280,12 @@ Standing rules derived from the above:
   `tense` (per-round industrial brood), `heroic`/`final` (damage phases: electronic metal —
   detuned saws → tanh waveshaper power chords, kick-driven sidechain `duck` gain on the melodic
   bus, gated sub; percussion bypasses the duck). AudioContext starts on the deploy click. Event foley lives in `main.js`: net handlers (per-type `enemyDie` with `volAt`
-  distance attenuation, capsule drop/land tracking via `capsTracked`) plus a render-loop block
+  distance attenuation, capsule drop/land tracking via `capsTracked`, `seekerLaunch` salvo whoosh
+  capped at 4 staggered shots, distance-attenuated `seekerBoom`) plus a render-loop block
   (footsteps/jump/land off `player.onGround`/`vel`, low-HP heartbeat, OBLIT/FINAL countdown
-  ticks); `EnemyManager.onSpawn` is the throttled spawn-blip hook. `audio.hurt(dmg, src, pan)`
+  ticks, and `audio.seekerWhine` — ONE persistent loop node, gain 0 when idle, fed the nearest
+  live seeker's closeness + stereo pan every frame and explicitly zeroed when the lobby shows);
+  `EnemyManager.onSpawn` is the throttled spawn-blip hook. `audio.hurt(dmg, src, pan)`
   is source-flavored (laser sizzle / melee thud / void scorch / energy zap), severity-scaled
   with a sub-thump at ≥45 dmg, and stereo-panned toward the attacker when the hurt message
   carries an `imp` knockback vector; `lowHp()` fires once on crossing under 70 HP (4 s cooldown,

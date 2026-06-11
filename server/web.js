@@ -8,10 +8,10 @@ const PORT = process.env.PORT || 3000;
 
 function banner(url, extra = '') {
   console.log('\n============================================================');
-  console.log('  SHATTERED VAULT — PUBLIC FIRETEAM LINK');
+  console.log('  VAULT OF THE MACHINE — PUBLIC FIRETEAM LINK');
   console.log(`\n  ${url}\n`);
   if (extra) console.log(extra);
-  console.log('  Share the link with up to 3 friends — they just open it');
+  console.log('  Share the link with up to 5 friends — they just open it');
   console.log('  in a browser. You can play on http://localhost:' + PORT);
   console.log('============================================================\n');
 }

@@ -1,4 +1,4 @@
-# SHATTERED VAULT
+# VAULT OF THE MACHINE
 
 > **🤖 Vibe-coded.** Every line of code in this project was completely written by
 > Claude Fable 5, with me serving as director — setting the vision, playtesting each build, and steering the design
@@ -29,7 +29,7 @@ This boots the same server and opens a **public HTTPS link** you can send to fri
 anywhere — no port forwarding, no accounts. It prints something like:
 
 ```
-  SHATTERED VAULT — PUBLIC FIRETEAM LINK
+  VAULT OF THE MACHINE — PUBLIC FIRETEAM LINK
   https://cuddly-turkeys-refuse.loca.lt
 ```
 
@@ -183,3 +183,7 @@ a proportionally bigger horde. Solo clears take ~3 damage phases.
 
 Notes: joining mid-encounter is allowed (boss HP stays as rolled at start). The 7th
 connection is rejected with a "fireteam full" message.
+
+## License
+
+[MIT](LICENSE) © Jeremias Lino Ferrao

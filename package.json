@@ -1,7 +1,9 @@
 {
-  "name": "shattered-vault",
+  "name": "vault-of-the-machine",
   "version": "1.0.0",
-  "description": "SHATTERED VAULT — a 1-4 player Destiny-style raid encounter. Supers, weapon swapping, and VAULTHUR, Shattered Watcher of the Deep.",
+  "description": "VAULT OF THE MACHINE — a 1-6 player Destiny-style raid encounter. Supers, weapon swapping, and VAULTHUR, Shattered Watcher of the Deep.",
+  "license": "MIT",
+  "author": "Jeremias Lino Ferrao",
   "type": "module",
   "scripts": {
     "start": "node server/main.js",

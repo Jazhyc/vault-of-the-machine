@@ -106,6 +106,6 @@ setInterval(() => {
 }, 50);
 
 server.listen(PORT, () => {
-  console.log(`SHATTERED VAULT raid server up — http://localhost:${PORT}`);
+  console.log(`VAULT OF THE MACHINE raid server up — http://localhost:${PORT}`);
   console.log(`Fireteam size: 1-${MAX_PLAYERS}. Share your LAN address for co-op.`);
 });

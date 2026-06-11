@@ -8,6 +8,20 @@ A browser-based, Destiny-style **1–6 player raid encounter**. One boss, real m
 supers, three weapons, and a raid-sized fireteam of up to six — but every mechanic is tuned
 to be **fully soloable**.
 
+## Just want to play? (Windows, zero install)
+
+Download **`vault-of-the-machine-win64.zip`** from the
+[latest release](https://github.com/Jazhyc/vault-of-the-machine/releases/latest), extract it
+anywhere, and double-click **`start.bat`**. Everything is included — Node, the tunnel client,
+the game — nothing gets installed. A public **fireteam link** appears in the window; send it
+to up to 5 friends (they just open it in a browser) and play on `http://localhost:3000`
+yourself. Keep the window open while you play.
+
+> Windows SmartScreen may warn about an unrecognized app the first time — choose
+> **More info → Run anyway**.
+
+Everything below is for running from source / development.
+
 ## Run it
 
 ```bash
@@ -183,6 +197,28 @@ a proportionally bigger horde. Solo clears take ~3 damage phases.
 
 Notes: joining mid-encounter is allowed (boss HP stays as rolled at start). The 7th
 connection is rejected with a "fireteam full" message.
+
+## Building the release bundle
+
+The zero-install Windows zip on the Releases page is produced by:
+
+```bash
+bash bundle/make-bundle.sh    # → dist/vault-of-the-machine-win64.zip
+```
+
+(Run it from WSL, Git Bash, Linux, or macOS; it needs `curl`, `zip`, `unzip`, and a local
+`node`.) The script stages a `vault-of-the-machine/` folder containing:
+
+- `node/node.exe` — the latest portable Node LTS, fetched from nodejs.org (only the exe;
+  npm isn't needed since `node_modules/` ships pre-installed)
+- `cloudflared.exe` — Cloudflare's tunnel client, fetched from its GitHub releases.
+  `server/web.js` looks for this bundled copy next to `package.json` before falling back
+  to PATH, so hosts get the clean `trycloudflare.com` link with nothing installed
+- the game (`server/`, `shared/`, `public/`, `node_modules/`) plus `start.bat`, which runs
+  `server/web.js` with the bundled Node
+
+Downloads are cached in `dist/.cache`, so rebuilds don't re-fetch. To publish: build, then
+attach the zip to a GitHub release.
 
 ## License
 

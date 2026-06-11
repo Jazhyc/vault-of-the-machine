@@ -14,6 +14,7 @@ npm test             # headless simulation of the full encounter (fast, no brows
 npm run smoke        # boots the real server + a WebSocket bot through join/encounter-start
 SMOKE_URL=https://some-tunnel.example npm run smoke   # run the smoke bot against a live/tunneled server
 node --check public/js/<file>.js   # syntax-check client files (there is no bundler or linter)
+bash bundle/make-bundle.sh         # zero-install Windows zip (portable Node + cloudflared) → dist/
 ```
 
 There is no build step: the browser loads ES modules directly. Three.js is vendored from

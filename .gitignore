@@ -1,3 +1,4 @@
 node_modules/
 .unlocks.json
 .serena/
+dist/

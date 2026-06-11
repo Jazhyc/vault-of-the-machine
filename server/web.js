@@ -2,9 +2,19 @@
 // public tunnel to it. Prefers cloudflared (no interstitial page, no account);
 // falls back to localtunnel (pure npm, also no account).
 import { spawn } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import './main.js'; // starts the http+ws raid server on PORT
 
 const PORT = process.env.PORT || 3000;
+
+// The downloadable bundle (bundle/make-bundle.sh) ships cloudflared next to
+// package.json — prefer that copy so hosts need nothing on their PATH.
+const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+const CF_BIN = ['cloudflared.exe', 'cloudflared']
+  .map((n) => path.join(ROOT, n))
+  .find((p) => fs.existsSync(p)) || 'cloudflared';
 
 function banner(url, extra = '') {
   console.log('\n============================================================');
@@ -24,7 +34,7 @@ function tryCloudflared() {
     const finish = (val) => { if (!done) { done = true; resolve(val); } };
     let proc;
     try {
-      proc = spawn('cloudflared', ['tunnel', '--no-autoupdate', '--url', `http://localhost:${PORT}`]);
+      proc = spawn(CF_BIN, ['tunnel', '--no-autoupdate', '--url', `http://localhost:${PORT}`]);
     } catch { return finish(null); }
     const scan = (d) => {
       const m = String(d).match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/);

@@ -15,7 +15,8 @@ Download **`vault-of-the-machine-win64.zip`** from the
 anywhere, and double-click **`start.bat`**. Everything is included — Node, the tunnel client,
 the game — nothing gets installed. A public **fireteam link** appears in the window; send it
 to up to 5 friends (they just open it in a browser) and play on `http://localhost:3000`
-yourself. Keep the window open while you play.
+yourself. Keep the window open while you play. You might need to wait a few seconds for the
+tunnel to work.
 
 > Windows SmartScreen may warn about an unrecognized app the first time — choose
 > **More info → Run anyway**.

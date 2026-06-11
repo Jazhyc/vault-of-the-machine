@@ -46,7 +46,12 @@ export const WEAPONS = {
             // climb, drift right, swing back left — the classic S
             recoil: [[1, 0], [1.15, 0.05], [1.3, 0.12], [1.45, 0.22], [1.55, 0.38], [1.5, 0.58], [1.35, 0.78], [1.15, 0.92],
                      [1, 0.7], [0.95, 0.3], [0.9, -0.15], [0.9, -0.55], [0.95, -0.85], [1, -1], [1, -0.6], [0.95, -0.25]] },
-  hand:   { name: 'DUSKFALL HC', desc: 'hand cannon — heavy crits', slot: 1, kind: 'hitscan', auto: false, rpm: 140, dmg: 42, critMul: 1.8,
+  hand:   { name: 'DUSKFALL HC', desc: 'hand cannon — heavy crits', slot: 1, kind: 'hitscan', auto: false, rpm: 120, dmg: 48, critMul: 2.5,
+            // precision identity: the 120 crit one-taps a husk (120 hp) and crit+anything fells
+            // an acolyte (160 hp) without ever one-shotting it — that floor forces crit DPS to
+            // 120×rpm/60, so rpm is the only safe DPS knob. At 120 rpm: 96 body DPS (spray is
+            // the auto's game at 154) vs 240 all-crits — well over realistic body-shot auto
+            // fire and still under the sniper (~249) and point-blank shotgun (~277)
             mag: 11, reload: 1.9, reserves: Infinity, spread: 0.007, adsSpread: 0.002, kick: 0.012, range: 200, zoomFov: 52,
             recoil: [[1, 0.12], [1.1, -0.1], [1.2, 0.15], [1.25, -0.12], [1.3, 0.18]] },
   // specials (green ammo)
@@ -107,7 +112,7 @@ export const CLASS_SUPER = { voidcaller: 'nova', gunslinger: 'golden', sentinel:
 
 // Server-side caps on a single client-reported hit, per weapon (pre-golden).
 // shotgun is per-trigger-pull (pellets aggregated client-side).
-export const DMG_CAPS = { auto: 25, sniper: 230, melee: 90, hand: 80, shotgun: 225, lmg: 52, gjally: 135, gswarm: 60 };
+export const DMG_CAPS = { auto: 25, sniper: 230, melee: 90, hand: 125, shotgun: 225, lmg: 52, gjally: 135, gswarm: 60 };
 
 export const ENEMIES = {
   // kb: knockback shove as [horizontal, vertical] m/s. The client computes

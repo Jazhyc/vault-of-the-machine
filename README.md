@@ -1,5 +1,9 @@
 # SHATTERED VAULT
 
+> **🤖 Vibe-coded.** Every line of code in this project was completely written by
+> Claude Fable 5, with me serving as director — setting the vision, playtesting each build, and steering the design
+> through feedback. It exists as a test of what Claude can build rather than a product.
+
 A browser-based, Destiny-style **1–6 player raid encounter**. One boss, real mechanics,
 supers, three weapons, and a raid-sized fireteam of up to six — but every mechanic is tuned
 to be **fully soloable**.
@@ -51,13 +55,14 @@ public tunnel — handy to confirm your internet link works before inviting frie
 
 ## Classes & Supers (pick at deploy)
 
-| Class | Super | Effect |
+| Class | Super | Grenade |
 |---|---|---|
-| **Voidcaller** | Nova Burst | Hurl a void singularity — 2600 AoE damage |
-| **Gunslinger** | Golden Volley | 9 s of 3.5× weapon damage |
-| **Sentinel** | Ward Aegis | Healing dome: 50% damage resist, heals allies, blocks Obliteration |
+| **Voidcaller** | Nova Burst — hurl a void singularity, 2600 AoE damage | Leaves a gnawing void orb behind |
+| **Gunslinger** | Golden Volley — 9 s of 3.5× weapon damage | Bursts into four hunting embers |
+| **Sentinel** | Ward Aegis — healing dome: 50% damage resist, heals allies, blocks Obliteration | Splits into mend-orbs that chase the wounded |
 
-Super charges passively, from damage dealt, kills, and dunking charges (press **F** at 100%).
+Super charges passively, from damage dealt, kills, and solving the vault's mechanics
+(press **F** at 100%).
 
 ## Weapons (pick one per slot at deploy; swap with 1 / 2 / 3 or mouse wheel)
 
@@ -75,43 +80,88 @@ sprint, and a double jump.
 
 ## The encounter — VAULTHUR, Shattered Watcher of the Deep
 
-1. **Start** — the whole fireteam stands on the glowing center plate for 3 s.
-2. **Mechanics phase** — Vaulthur is **IMMUNE**. Adds pour from three gates. Periodically a
-   **Vault Keeper** (yellow-bar) spawns and one of three **Resonance Locks** (ROSE / AZURE /
-   AMBER) ignites. Kill the Keeper, grab its **Void Charge**, and dunk it at the lit Lock
-   before the charge destabilizes (28 s). You move slower while carrying.
-3. **Damage phase** — after **3 dunks** the shield shatters for **25 s**, and the phase is
-   hectic by design: Vaulthur **marks one Guardian** (announced to the whole lobby) and turns
-   to face them — volleys pour at the mark and the glowing crit core points their way, so the
-   team stacks up front and hits it for crits. It also keeps chaining whatever specials its
-   round has unlocked, **faster than usual**. Meanwhile, on its back:
-   - Three sealed **Viral Blisters** have ridden the boss since it woke — bulging from its
-     back side, immune to ordinary fire.
-   - Pairs of green **Antiviral Patch** capsules drop from the sky every **5 s**. Catch **3**
-     and your fire can burst a Blister. One burst spends the patches — and splash damage can
-     accidentally pop more than one Blister at once. Burst Blisters never regrow.
-   - A burst Blister flings an **AURIC KEY** to the floor. Whoever grabs it carries it to an
-     intact Lock to **wake its Refuge Well** before the blast.
-4. **Obliteration** — when the phase ends, Vaulthur charges an arena-wide blast (the arena
-   blanches white as it winds up). Refuge Wells are **dormant by default**: only a key-woken
-   well shelters you — anyone caught outside (and outside a Sentinel's Ward) is **erased
-   outright**. **Every woken well collapses forever after the blast** — its crystal tumbles
-   dead onto the floor — so the three Locks double as the raid's clock. Then it all repeats,
-   harder:
-   - **Round 2+** — Vault Keepers arrive warded by orbiting **Wisps** that soak your shots,
-     and Vaulthur opens up with a **rhythmic barrage**: spiral arms of caged embers that
-     snake chest-high and bob to the beat — too high to duck, too low to jump; weave the
-     gaps sideways.
-   - **Round 3+** — Vaulthur periodically **partitions the arena**: two converging laser
-     beams sweep at shin height (jump them!). Enemies stop spawning while the beams spin.
-5. **Final Stand** — at **25% HP** (marked by the notch on the boss bar) the shield stays
-   down but Vaulthur begins a 32 s **Annihilation** cast while throwing hasted,
-   **overlapping** specials — sweeps over barrages over volleys. Kill him before the cast
-   completes or the fireteam wipes.
+The shape of the raid, spoiler-free:
+
+1. **Rally** — in the lobby, plant the banner on the white circle near spawn; every guardian
+   can rally at it once for a full restock. Then the whole fireteam stands on the glowing
+   center plate for 3 s.
+2. **Mechanics phase** — Vaulthur is **IMMUNE** and adds pour from three gates. The arena
+   holds everything you need to bring the shield down — read the pillars, watch the sky,
+   and trust that the fiction is hinting at the mechanic.
+3. **Damage phase** — the shield shatters for **25 s** and the fight gets hectic by design.
+   Hurt him — but keep one eye on what's falling from the sky, because…
+4. **Obliteration** — when the phase ends, Vaulthur charges an arena-wide blast. Shelter
+   exists, but only for fireteams that earned it during the damage phase. Then it all
+   repeats, **harder** — each round unlocks new boss attacks.
+5. **Final Stand** — at **25% HP** (the notch on the boss bar) Vaulthur stops cycling and
+   starts killing. Kill him first.
 6. **Victory** — a vault cache spawns. Press **E** for your exotic — **each guardian must
    claim it personally**; skipping the cache means leaving empty-handed. The encounter
    resets 30 s later and everyone returns to the selection screen to re-pick class and
    loadout.
+
+The raid is meant to be solved blind — the details below are for stuck fireteams.
+
+<details>
+<summary>⚠️ <strong>Full mechanics guide (heavy spoilers)</strong></summary>
+
+### Mechanics phase — the sky sigil
+
+- Two **Vault Keepers** rise warded — immune until their ward breaks. Each round deals the
+  three Lock colors (ROSE / AZURE / AMBER) out: one to each twin Keeper, one held back.
+- A **3×3 star lattice** hangs in the northern sky; each of the six pillars projects one
+  glowing segment of a code in its Keeper's color. Shoot the lattice stars to light the
+  combined three-segment code of one twin — an exact match calls down a **lattice strike**
+  that breaks that Keeper's ward (and one-shots any unwarded add near the blast). Matching
+  a code also feeds the whole fireteam's super gauges.
+- While the twin codes are live, Vaulthur periodically **grabs the lattice panel** and hurls
+  it around the sky-ring — it stays wherever it lands, so re-find it before you fire.
+- Both twins dead → the **Herald** rises over the boss in the held-back color, behind a
+  weak but **destructible** ward that only blessed fire can wound: stand at the Lock of the
+  Herald's color to take the short-lived **wardbreaker** blessing, then shoot the ward down.
+  It detonates Herald and all.
+- The Herald's death tears a **wormhole**; a lance falls through it and **breaks the
+  shield** — damage phase begins.
+
+### Damage phase — the viral mechanic
+
+- Vaulthur **marks one Guardian** (announced to everyone) and turns to face them — volleys
+  and seeker salvos converge on the mark, and the glowing crit core points their way, so
+  the team stacks up front and crits. He also chains his round-unlocked specials **faster
+  than usual**.
+- Three sealed **Viral Blisters** ride his back, immune to ordinary fire. Pairs of green
+  **Antiviral Patch** capsules drop every **5 s**; catch **3** and your fire can burst a
+  Blister (one burst spends the patches; splash can pop several at once; burst Blisters
+  never regrow).
+- A burst Blister flings an **AURIC KEY** to the floor. Whoever grabs it carries it to an
+  intact Lock to **wake its Refuge Well** before the blast.
+
+### Obliteration
+
+Refuge Wells are **dormant by default**: only a key-woken well shelters you — anyone caught
+outside (and outside a Sentinel's Ward) is **erased outright**. **Every woken well collapses
+forever after the blast**, so the three Locks double as the raid's clock.
+
+### Escalation
+
+- **Round 1** — Vaulthur already launches **Riven Seekers** off his back: perfectly-homing
+  missiles you can shoot down (they chain-pop each other), feed a pillar, or out-sprint —
+  walking is not enough. Salvos grow by one missile every phase.
+- **Round 2+** — Keepers arrive orbited by shot-soaking **Wisps**, and Vaulthur opens up
+  with a **rhythmic barrage**: spiral arms of caged embers that snake chest-high and bob to
+  the beat — too high to duck, too low to jump; weave the gaps sideways.
+- **Round 3+** — Vaulthur periodically **partitions the arena**: two converging laser beams
+  sweep at shin height (jump them!). Enemies stop spawning while the beams spin.
+
+### Final Stand
+
+At 25% HP an emergency **generator surge** reignites the shield for 30 s: one sweep beam
+spins for the entire surge while seeker bursts launch every couple of seconds, dealt
+round-robin so **every** guardian is hunted. When the generator dies the shield drops for
+good and the 32 s **Annihilation** cast begins — Vaulthur throws hasted, **overlapping**
+specials (sweeps over barrages over volleys) until he or the fireteam is finished.
+
+</details>
 
 Downed teammates can be revived (**E** once, 3 s channel with a progress bar — downed allies
 beam a green pillar of light). If everyone is down, the encounter wipes and
@@ -123,7 +173,7 @@ a proportionally bigger horde. Solo clears take ~3 damage phases.
 ## Architecture
 
 - **Server** (`server/`) — Node + `ws`. Authoritative for the encounter state machine, enemy
-  AI, boss attacks, projectiles, player HP/revives, orbs/dunks, and super validation. Caps
+  AI, boss attacks, projectiles, player HP/revives, the sigil mechanic, and super validation. Caps
   client-reported damage and gates Nova Burst behind an actual cast (`server/game.js` is
   fully deterministic — time only advances through `tick(dt)`, which is how the headless
   tests simulate whole raids in milliseconds).

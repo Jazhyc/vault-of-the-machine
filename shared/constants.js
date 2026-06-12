@@ -162,12 +162,14 @@ export const ENEMIES = {
   // stands within hitR of that point. The counterplay is a momentum change
   // inside the lock window (brake, reverse, jump) or hard cover — pillars
   // block the shot (losBlocked). lock must comfortably exceed the ~0.1–0.15 s
-  // snapshot lag so the frozen beam is readable before the crack.
+  // snapshot lag so the frozen beam is readable before the crack. dmgFrac
+  // stays under 0.5 so eating BOTH keepers' snipes back-to-back leaves a
+  // sliver of HP instead of a no-counterplay down.
   // fireCd/projSpeed/chargeT drive only the sky herald's heavy lobs (it keeps
   // the old ranged behavior — its fight is about standing in the pedestal
   // circle, where momentum-dodging would fight the objective).
   keeper:  { name: 'Vault Keeper', hp: 950, speed: 2.8, dmg: 28, fireCd: 3.6, projSpeed: 13, chargeT: 0.9,
-             snipe: { range: 34, track: 1.6, lock: 0.6, cd: 4.2, hitR: 1.4, dmgFrac: 0.5, kb: [4, 2] } },
+             snipe: { range: 34, track: 1.6, lock: 0.6, cd: 4.2, hitR: 1.4, dmgFrac: 0.4, kb: [4, 2] } },
   wisp:    { name: 'Warding Wisp', hp: 80, dmg: 10, fireCd: 4.5, projSpeed: 14, orbitR: 2.9, orbitSpeed: 1.6 },
   // static damage-phase objective; immune unless the shooter carries 3 antiviral patches
   blister: { name: 'Viral Blister', hp: 220 },

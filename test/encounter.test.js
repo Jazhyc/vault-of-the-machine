@@ -1332,13 +1332,13 @@ const slay = (g, id) => { while (g.enemies.has(id)) g.onMessage('p1', { t: 'hit'
   se = msgs.findLast(x => x.m.t === 'snap').m.enemies.find(en => en.id === kpr.id);
   assert.ok(se.lk && se.ft > g.t, 'snapshot carries the frozen kill-point and fire time');
 
-  // …and the instant shot lands for half max HP
+  // …and the instant shot lands for dmgFrac of max HP
   msgs = [];
   advance(g, S.lock + 0.1);
   assert.equal(snipesAt().length, 1, 'one snipe crack broadcast');
   assert.equal(snipesAt()[0].m.hit, 'p1');
   const hurt = msgs.find(x => x.to === 'p1' && x.m.t === 'hurt' && x.m.src === 'snipe');
-  assert.equal(hurt.m.dmg, Math.round(PLAYER.maxHp * S.dmgFrac), 'the hit takes half of max HP');
+  assert.equal(hurt.m.dmg, Math.round(PLAYER.maxHp * S.dmgFrac), 'the hit takes dmgFrac of max HP');
   assert.ok(kpr.nextAtkAt > g.t + 1, 'sniper cooldown counts from the shot');
 
   // a prey that KEEPS its momentum is led perfectly: walk +x at 8 m/s through

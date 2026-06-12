@@ -188,6 +188,7 @@ export class WeaponSystem {
     this.projectiles = [];
     this.wolves = []; // homing missiles: Gjallarhorn wolfpack + gunslinger grenade embers
     this.voidZones = []; // local voidcaller orbs (predicted DoT numbers only)
+    this.pendingSuper = null; // confirmed cast waiting for the flourish apex
     this.now = 0;
 
     // viewmodel rig
@@ -213,6 +214,7 @@ export class WeaponSystem {
     });
     addEventListener('keydown', (e) => {
       if (!document.pointerLockElement || e.repeat) return;
+      if (this.ctx.player.cineActive) return; // hands are busy mid-flourish
       if (e.code === code('weapon1')) this.switchTo(0);
       if (e.code === code('weapon2')) this.switchTo(1);
       if (e.code === code('weapon3')) this.switchTo(2);
@@ -237,6 +239,7 @@ export class WeaponSystem {
     this.cur = 0;
     this.reloadEnd = 0;
     this.switchEnd = 0;
+    this.pendingSuper = null; // a re-kit mid-flourish must not throw a stale nova
   }
 
   get def() { return this.defs[this.cur]; }
@@ -643,14 +646,23 @@ export class WeaponSystem {
     this.ctx.net.superCast(this.aimDir(0).toArray());
   }
 
-  // server confirmed our super
+  // server confirmed our super: start the third-person flourish and hold the
+  // payoff (throw/sfx/shake) for the apex — update() fires pendingSuper
   onSuperConfirmed(kind, dir) {
+    this.ctx.player.startSuperCine(SUPER.cast.dur);
+    this.ctx.audio.chargeUp(2, SUPER.cast.apex);
+    this.pendingSuper = { kind, dir, at: this.now + SUPER.cast.apex };
+  }
+
+  fireSuper(kind, dir) {
     this.ctx.audio.superCast(kind);
+    this.ctx.effects.shake(0.3);
     if (kind === 'nova') {
-      const d = dir ? new THREE.Vector3(...dir) : this.aimDir(0);
-      const from = this.ctx.camera.position.clone().addScaledVector(d, 1.2);
+      // thrown from the body, not the camera — the camera is out behind us
+      const d = (dir ? new THREE.Vector3(...dir) : this.aimDir(0)).normalize();
+      const from = this.ctx.player.pos.clone()
+        .add(new THREE.Vector3(0, 1.5, 0)).addScaledVector(d, 1.2);
       this.spawnProjectile('nova', from, d.multiplyScalar(SUPER.nova.speed), 0x9d4edd, 0.8);
-      this.ctx.effects.shake(0.3);
     }
   }
 
@@ -707,13 +719,21 @@ export class WeaponSystem {
   update(dt, now) {
     this.now = now;
     const d = this.def, s = this.st;
-    const alive = this.ctx.player.alive && document.pointerLockElement;
+    const cine = this.ctx.player.cineActive; // mid-flourish: no ADS/fire, no viewmodel
+    const alive = this.ctx.player.alive && document.pointerLockElement && !cine;
+
+    // the held-back super payoff lands at the flourish apex
+    if (this.pendingSuper && now >= this.pendingSuper.at) {
+      const { kind, dir } = this.pendingSuper;
+      this.pendingSuper = null;
+      this.fireSuper(kind, dir);
+    }
 
     // ADS
     const wantAds = this.ads && alive && !this.reloading;
     this.ctx.player.fovTarget = wantAds ? d.zoomFov : this.ctx.player.baseFov;
     this.ctx.hud.scope(wantAds && d.key === 'sniper');
-    this.rig.visible = !(wantAds && d.key === 'sniper');
+    this.rig.visible = !(wantAds && d.key === 'sniper') && !cine;
 
     // reload
     if (this.reloading) {

@@ -485,9 +485,31 @@ const slay = (g, id) => { while (g.enemies.has(id)) g.onMessage('p1', { t: 'hit'
   assert.ok([...g.wells.values()].some(w => w.kind === 'ward'), 'ward well placed');
   ok('ward super casts');
 
-  g.dmgPlayer(p, 500, 'test');
+  g.dmgPlayer(p, 5000, 'test'); // big: cast-flourish DR + ward DR both apply right after a cast
   assert.equal(g.enc.st, 'WIPE', 'solo player going down wipes immediately');
   ok('solo down → instant wipe');
+}
+
+// ---------- super-cast flourish damage resistance ----------
+{
+  const g = mkGame();
+  const p = g.addPlayer('p1', 'Poser', 'voidcaller');
+  g.addPlayer('p2', 'Witness', 'sentinel'); // a second guardian so a down can't wipe the run
+  moveTo(g, 'p1', [0, 0, 1]);
+  moveTo(g, 'p2', [2, 0, 1]);
+  advance(g, ENC.readyTime + 0.5);
+
+  p.sup = 100;
+  g.onMessage('p1', { t: 'superCast', dir: [0, 0, 1] });
+  p.hp = PLAYER.maxHp;
+  g.dmgPlayer(p, 60, 'test');
+  assert.ok(Math.abs((PLAYER.maxHp - p.hp) - 60 * (1 - SUPER.cast.dr)) < 0.01,
+    'damage reduced during the cast flourish');
+  advance(g, SUPER.cast.dur + 0.1); // window over (regenDelay is 5s — hp untouched)
+  const hpBefore = p.hp;
+  g.dmgPlayer(p, 60, 'test');
+  assert.ok(Math.abs((hpBefore - p.hp) - 60) < 0.01, 'full damage once the flourish ends');
+  ok('super-cast flourish DR window');
 }
 
 // ---------- 4-player scaling & revive ----------
@@ -545,7 +567,7 @@ const slay = (g, id) => { while (g.enemies.has(id)) g.onMessage('p1', { t: 'hit'
   g.onMessage('p1', { t: 'hit', target: 'boss', dmg: 700, weapon: 'sniper' });
   assert.equal(before - g.enc.bossHp, 700, 'golden-buffed hit passes the raised cap');
   god(g);
-  advance(g, SUPER.golden.dur + 0.5);
+  advance(g, SUPER.cast.dur + SUPER.golden.dur + 0.5); // golden counts from the end of the flourish
   const before2 = g.enc.bossHp;
   g.onMessage('p1', { t: 'hit', target: 'boss', dmg: 700, weapon: 'sniper' });
   assert.ok(before2 - g.enc.bossHp <= 231, 'cap restored after golden expires');

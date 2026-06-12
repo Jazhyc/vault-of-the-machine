@@ -69,6 +69,22 @@ clumped hurt). Two client-side burst clamps tame TCP clumping at high ping (seve
 messages landing in one frame): `player.impulse` budgets the per-frame summed shove
 (`PLAYER.kbFrameCap`) and `effects.shake` budgets per-frame growth.
 
+**Super cast flourish** (`SUPER.cast` in shared/constants.js): a validated `superCast` sets
+`p.castUntil = t + cast.dur` and `dmgPlayer` applies `cast.dr` damage resistance inside the
+window — the client roots the caster for the whole flourish, so it must not be a free kill.
+Golden's `goldenUntil` counts from the END of the window (the client can't fire during it).
+Client side: `player.startSuperCine` pulls the camera out third-person Destiny-style (movement,
+look, jump and all weapon input gate on `player.cineActive`; viewmodel hidden; both camera-path
+endpoints blend to the exact first-person pose so there is never a cut; velocity zeroes and
+gravity/wind/shoves pause, so an airborne caster hangs where the cast caught them), `selfBody`
+in main.js
+(a name-tag-less `buildGuardian`, rebuilt per deploy since class can change) stands in for the
+local player, `effects.superFlare` (pooled class-colored pillar + burst ring, no lights) plays
+for caster and remotes alike, and the payoff — nova thrown from the BODY position, sfx, shake —
+lands at `cast.apex` via `weapons.pendingSuper`. Remote clients delay their cosmetic nova/sfx by
+the same apex so the throw timing matches everywhere (safe: casters are rooted, so the cast-time
+position stays true).
+
 Grenades are per-class (`GRENADE` in shared/constants.js, which also documents the per-class
 damage budget); the server resolves `explode {kind:'grenade'}` dmg/r from `p.cls`, and everything
 is class-colored client-side (the remote `pf`/`explosion` renders look the thrower's class up in

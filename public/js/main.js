@@ -236,6 +236,17 @@ let bannerRallied = false; // this lobby's banner already restocked me
 let prevHp = PLAYER.maxHp, lowHpCueAt = 0;
 const remoteProjs = [];
 
+// Third-person body of the local player — drawn only while the super-cast
+// flourish holds the camera out. Rebuilt per deploy (class can change).
+let selfBody = null;
+const rebuildSelfBody = (name) => {
+  if (selfBody) scene.remove(selfBody.g);
+  selfBody = buildGuardian(name, selectedClass);
+  selfBody.tag.visible = false; // your own name floating overhead reads wrong
+  selfBody.g.visible = false;
+  scene.add(selfBody.g);
+};
+
 const serverNow = () => performance.now() / 1000 + serverOffset;
 const getEnc = () => snap ? snap.enc : null;
 const me = () => snap && net.myId ? snap.players.find(p => p.id === net.myId) : null;
@@ -252,6 +263,7 @@ $('deployBtn').onclick = async () => {
     // returning from the post-victory selection screen: same connection, new kit
     net.send({ t: 'loadout', cls: selectedClass });
     weapons.setLoadout(keys);
+    rebuildSelfBody(name);
     player.teleportToSpawn();
     $('lobbyScreen').classList.add('hidden');
     hud.show();
@@ -274,6 +286,7 @@ $('deployBtn').onclick = async () => {
   weapons = new WeaponSystem({ camera, scene, targets, net, effects, audio, player, hud, getEnc, enemies,
     getCls: () => selectedClass }, keys);
   entities = new EntityManager(scene, net.myId, glowPool);
+  rebuildSelfBody(name);
   $('lobbyScreen').classList.add('hidden');
   hud.show();
   renderer.domElement.requestPointerLock();
@@ -552,16 +565,26 @@ net.on('super', (m) => {
   const cls = snap?.players.find(p => p.id === m.id)?.cls;
   const superName = cls ? CLASSES[cls].superName : 'SUPER';
   hud.toast(`${m.name} unleashes ${superName}!`, 'warn');
-  if (m.id === net.myId && weapons) weapons.onSuperConfirmed(m.kind, m.dir);
-  else {
-    audio.superCast(m.kind);
-    if (m.kind === 'nova' && m.dir && snap) {
-      const caster = snap.players.find(p => p.id === m.id);
-      if (caster) {
-        const from = new THREE.Vector3(caster.p[0], caster.p[1] + 1.5, caster.p[2]);
-        spawnRemoteProj(from, new THREE.Vector3(...m.dir), SUPER.nova.speed, 0x9d4edd, { big: true });
+  const col = CLASSES[cls]?.color || '#ffffff';
+  if (m.id === net.myId && weapons) {
+    weapons.onSuperConfirmed(m.kind, m.dir); // starts the flourish; payoff at apex
+    effects.superFlare(player.pos, col, SUPER.cast.dur, SUPER.cast.apex);
+  } else {
+    const caster = snap?.players.find(p => p.id === m.id);
+    if (!caster) { audio.superCast(m.kind); return; }
+    const from = new THREE.Vector3(...caster.p);
+    effects.superFlare(from, col, SUPER.cast.dur, SUPER.cast.apex);
+    audio.chargeUp(volAt(caster.p) * 2, SUPER.cast.apex);
+    // the remote payoff waits for the same apex; the caster is rooted through
+    // their own flourish, so the cast-time position stays true
+    setTimeout(() => {
+      if (!joined) return;
+      audio.superCast(m.kind);
+      if (m.kind === 'nova' && m.dir) {
+        spawnRemoteProj(from.clone().add(new THREE.Vector3(0, 1.5, 0)),
+          new THREE.Vector3(...m.dir), SUPER.nova.speed, 0x9d4edd, { big: true });
       }
-    }
+    }, SUPER.cast.apex * 1000);
   }
 });
 net.on('hurt', (m) => {
@@ -858,6 +881,17 @@ function loop() {
   const lobbyVisible = !$('lobbyScreen').classList.contains('hidden');
   if (joined && player && !lobbyVisible) {
     player.update(dt, now);
+    // super flourish: the third-person body exists only while the camera is out
+    if (selfBody) {
+      const on = player.cineActive;
+      if (on) {
+        // rise into the apex, settle as the wave lands (apex ≈ 0.56 of dur)
+        const hover = Math.sin(Math.min(1, player.cineK / 0.56) * Math.PI) * 0.45;
+        selfBody.g.position.set(player.pos.x, player.pos.y + hover, player.pos.z);
+        selfBody.g.rotation.y = player.yaw + Math.PI;
+      }
+      selfBody.g.visible = on;
+    }
     weapons.update(dt, now);
     entities.update(dt, renderTime, now, player.pos);
     const my = me();

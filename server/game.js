@@ -68,7 +68,7 @@ export class Game {
     for (const p of this.players.values()) {
       p.hp = PLAYER.maxHp; p.downed = false; p.dead = false;
       p.goldenUntil = 0;
-      p.pendingNova = false; p.revive = null; p.looted = false;
+      p.pendingNova = false; p.castUntil = 0; p.revive = null; p.looted = false;
       p.antiviral = 0; p.hasKey = false; p.wardUntil = 0;
       p.restocked = false; // the next lobby's banner blesses everyone afresh
       p.pos = [...ARENA.spawn];
@@ -83,7 +83,7 @@ export class Game {
       id, name: String(name).slice(0, 16) || 'Guardian', cls,
       pos: [...ARENA.spawn], yaw: ARENA.spawnYaw, pitch: 0,
       hp: PLAYER.maxHp, lastDmg: -99, downed: false, dead: false, bleedAt: 0,
-      sup: 0, goldenUntil: 0, pendingNova: false,
+      sup: 0, goldenUntil: 0, pendingNova: false, castUntil: 0,
       antiviral: 0, hasKey: false, wardUntil: 0,
       vel: [0, 0, 0], lastStateAt: -1,
       revive: null, looted: false, restocked: false, lastExp: {},
@@ -233,9 +233,12 @@ export class Game {
     // show READY a hair before the server's float crosses 99.5.
     if (!this.alive(p) || p.sup < 99) return;
     p.sup = 0;
+    p.castUntil = this.t + SUPER.cast.dur; // the flourish window — DR in dmgPlayer
     const kind = CLASS_SUPER[p.cls] || 'nova';
     if (kind === 'nova') p.pendingNova = true;
-    else if (kind === 'golden') p.goldenUntil = this.t + SUPER.golden.dur;
+    // golden counts from the END of the flourish: the client roots fire through
+    // the cinematic, so starting at cast would silently eat ~18% of the buff
+    else if (kind === 'golden') p.goldenUntil = this.t + SUPER.cast.dur + SUPER.golden.dur;
     else if (kind === 'ward') {
       this.wells.set(nid(), { p: [...p.pos], r: SUPER.ward.r, until: this.t + SUPER.ward.dur, kind: 'ward' });
     }
@@ -300,6 +303,7 @@ export class Game {
   dmgPlayer(p, amount, src, imp = null) {
     if (!this.alive(p) || this.enc.st === 'LOBBY' || this.enc.st === 'VICTORY') return;
     if (this.inWell(p, 'ward')) amount *= 1 - SUPER.ward.dr;
+    if (p.castUntil > this.t) amount *= 1 - SUPER.cast.dr; // mid-flourish: the Light shields the rooted caster
     p.hp -= amount;
     p.lastDmg = this.t;
     this.send(p.id, { t: 'hurt', dmg: Math.round(amount), src, imp });

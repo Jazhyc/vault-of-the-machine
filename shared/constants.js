@@ -109,6 +109,11 @@ export const MELEE = { dmg: 70, range: 2.8, cd: 1.2 };
 
 export const SUPER = {
   passiveRate: 0.8, perDamage: 1 / 220, perKill: 4, perSigil: 20,
+  // cast: the Destiny-style flourish. The client pulls to third person for dur
+  // s (movement + fire rooted) and the payoff lands apex s in; the server
+  // mirrors the window as castUntil and grants dr damage resistance — a rooted
+  // caster mid-flourish must not be a free kill for volleys/snipers.
+  cast: { dur: 1.6, apex: 0.9, dr: 0.6 },
   // nova budget: the core blast traded raw punch (was 2600 / 9 m) for a vast
   // wave plus 8 homing shards (client-side wolfpack machinery landing as
   // capped `nswarm` hits). Each shard one-shots an acolyte (160 hp); the wave's

@@ -77,9 +77,43 @@ export class Effects {
     });
     this.sparkIdx = 0;
 
+    // Super-cast flourish flares: a class-colored light pillar that breathes in
+    // through the windup and bursts into a racing ground ring at the apex.
+    // Pool of 4 (simultaneous casts inside one 1.6 s window are rare even at 6
+    // players); materials cloned per slot — color and opacity animate per
+    // instance. No lights — the standing light-count rule applies.
+    const flareGeo = new THREE.CylinderGeometry(0.55, 0.85, 26, 12, 1, true);
+    const flareRingGeo = new THREE.RingGeometry(0.9, 1.1, 40).rotateX(-Math.PI / 2);
+    this.flares = Array.from({ length: 4 }, () => {
+      const mat = () => new THREE.MeshBasicMaterial({
+        color: 0xffffff, transparent: true, opacity: 0, depthWrite: false,
+        blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
+      });
+      const pillar = noRay(new THREE.Mesh(flareGeo, mat()));
+      const ring = noRay(new THREE.Mesh(flareRingGeo, mat()));
+      pillar.visible = ring.visible = false;
+      pillar.frustumCulled = ring.frustumCulled = false;
+      scene.add(pillar, ring);
+      return { pillar, ring, life: 0, dur: 1, apex: 0.5 };
+    });
+    this.flareIdx = 0;
+
     this.numQueue = [];
     this.shakeAmt = 0;
     this.shakeBudget = 1; // per-frame growth cap (see shake)
+  }
+
+  // A guardian's super flourish at pos: windup until apex s in, burst after.
+  superFlare(pos, color, dur, apex) {
+    const f = this.flares[this.flareIdx++ % this.flares.length];
+    f.pillar.material.color.set(color);
+    f.ring.material.color.set(color);
+    f.pillar.position.set(pos.x, pos.y + 13, pos.z);
+    f.ring.position.set(pos.x, pos.y + 0.05, pos.z);
+    f.dur = dur; f.apex = apex; f.life = dur;
+    f.pillar.scale.setScalar(1);
+    f.ring.scale.setScalar(1);
+    f.pillar.visible = f.ring.visible = true;
   }
 
   paintNumber(n, text, kind) {
@@ -138,6 +172,7 @@ export class Effects {
     for (const t of this.tracers) { t.line.visible = true; t.life = 0.0001; }
     for (const s of this.sparks) { s.mesh.visible = true; s.life = 0.0001; }
     for (const v of this.voids) { v.mesh.visible = true; v.life = 0.0001; v.dur = 1; v.r = 1; }
+    for (const f of this.flares) { f.pillar.visible = f.ring.visible = true; f.life = 0.0001; f.dur = 1; f.apex = 0.5; }
   }
 
   // colorOverride lets class-flavored booms (grenades, swarm embers) reuse the
@@ -245,6 +280,25 @@ export class Effects {
       v.mesh.scale.setScalar(v.r * (0.92 + 0.08 * Math.sin(t * 7)));
       v.mesh.material.opacity = 0.32 * fade;
       if (v.life <= 0) v.mesh.visible = false;
+    }
+    for (const f of this.flares) {
+      if (f.life <= 0) continue;
+      f.life -= dt;
+      const t = f.dur - f.life;
+      if (t < f.apex) { // windup: the pillar breathes in, the ring quivers
+        const k = t / f.apex;
+        f.pillar.material.opacity = 0.45 * k;
+        f.pillar.scale.set(1 - 0.45 * k, 1, 1 - 0.45 * k);
+        f.ring.material.opacity = 0.5 * k;
+        f.ring.scale.setScalar(1 + 0.35 * Math.abs(Math.sin(t * 9)));
+      } else { // burst: the ring races out as the pillar flares and dies
+        const k = Math.min(1, (t - f.apex) / Math.max(0.01, f.dur - f.apex));
+        f.pillar.material.opacity = 0.9 * (1 - k);
+        f.pillar.scale.set(0.55 + 1.6 * k, 1, 0.55 + 1.6 * k);
+        f.ring.material.opacity = 0.8 * (1 - k);
+        f.ring.scale.setScalar(1 + 11 * k);
+      }
+      if (f.life <= 0) f.pillar.visible = f.ring.visible = false;
     }
   }
 }

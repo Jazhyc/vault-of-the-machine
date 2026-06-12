@@ -26,6 +26,8 @@ export class LocalPlayer {
     this.windT = 0;                       // shockwave wind remaining (see blast)
     this.windDir = [1, 0];
     this.windAcc = 0;
+    this.cine = 0;                        // super-cast flourish remaining (s) — see startSuperCine
+    this.cineDur = 1;
 
     // mirrored server state
     this.hp = PLAYER.maxHp;
@@ -41,6 +43,7 @@ export class LocalPlayer {
     });
     addEventListener('keyup', (e) => this.keys.delete(e.code));
     addEventListener('mousemove', (e) => {
+      if (this.cine > 0) return; // the flourish owns the camera — look stays where the cast aimed
       if (document.pointerLockElement) {
         const zoomScale = this.camera.fov / this.baseFov;
         const s = sens();
@@ -52,6 +55,16 @@ export class LocalPlayer {
   }
 
   get alive() { return !this.downed && !this.dead; }
+  get cineActive() { return this.cine > 0; }
+  // 0→1 progress through the flourish (drives the third-person body + FX)
+  get cineK() { return this.cine > 0 ? 1 - this.cine / this.cineDur : 0; }
+
+  // Destiny-style super flourish: the camera eases out behind the guardian,
+  // movement and look are rooted (the server grants SUPER.cast.dr meanwhile),
+  // the caster hangs wherever the cast caught them — gravity, wind and shoves
+  // pause, because falling out of your own cinematic reads as a glitch — and
+  // update() glides back to first person as the window closes.
+  startSuperCine(dur) { this.cine = dur; this.cineDur = dur; }
 
   applyServerSelf(p, serverNow) {
     const wasAlive = this.alive;
@@ -96,15 +109,17 @@ export class LocalPlayer {
     this.pos.set(...ARENA.spawn);
     this.vel.set(0, 0, 0);
     this.windT = 0;
+    this.cine = 0;
     this.yaw = ARENA.spawnYaw; // face the arena center
     this.pitch = 0;
   }
 
   update(dt, now) {
     this.impBudget = PLAYER.kbFrameCap;
+    if (this.cine > 0 && !this.alive) this.cine = 0; // downed mid-flourish: snap straight back
     const k = this.keys;
     let fx = 0, fz = 0;
-    if (this.alive && document.pointerLockElement) {
+    if (this.alive && document.pointerLockElement && this.cine <= 0) {
       if (k.has(code('forward'))) fz += 1;
       if (k.has(code('back'))) fz -= 1;
       if (k.has(code('left'))) fx -= 1;
@@ -135,7 +150,7 @@ export class LocalPlayer {
 
     // jump & double jump, with jump buffering + coyote time
     if (this.onGround) this.lastGroundedAt = now;
-    if (now < this.jumpBufferUntil && this.alive) {
+    if (now < this.jumpBufferUntil && this.alive && this.cine <= 0) {
       const coyote = now - this.lastGroundedAt < 0.1 && this.vel.y <= 0.1;
       if (this.onGround || coyote) {
         this.vel.y = PLAYER.jumpVel;
@@ -148,8 +163,14 @@ export class LocalPlayer {
       }
     }
 
-    this.vel.y -= PLAYER.gravity * dt;
-    this.pos.addScaledVector(this.vel, dt);
+    // the flourish suspends the caster where the cast caught them: velocity
+    // dies and gravity/wind/shoves pause until the camera comes home
+    if (this.cine > 0) {
+      this.vel.set(0, 0, 0);
+    } else {
+      this.vel.y -= PLAYER.gravity * dt;
+      this.pos.addScaledVector(this.vel, dt);
+    }
 
     if (this.pos.y <= 0) {
       this.pos.y = 0;
@@ -177,6 +198,29 @@ export class LocalPlayer {
     // Explicitly zero roll: the lobby orbit camera's lookAt leaves a z (roll)
     // component behind, which otherwise tilts the view for the whole session.
     this.camera.rotation.set(this.pitch + this.recoilP, this.yaw + this.recoilY, 0, 'YXZ');
+    // Super flourish: ease out behind the guardian with a slow orbital drift,
+    // then glide back in over the last fifth. Both endpoints blend to the
+    // exact first-person pose (camera at the eye, look target 6 m down the
+    // aim), so there is never a cut. lookAt keeps up = world-Y → no roll, and
+    // the rotation.set above re-zeros everything the frame the flourish ends.
+    if (this.cine > 0) {
+      this.cine -= dt;
+      const k = this.cineK;
+      const ease = (x) => x * x * (3 - 2 * x);
+      const lift = ease(Math.min(1, k / 0.2)) - ease(Math.max(0, (k - 0.8) / 0.2));
+      const a = this.yaw + (k - 0.5) * 0.7 * lift; // drift around the cast
+      const cp = Math.cos(this.pitch);
+      this.camera.position.set(
+        this.pos.x + Math.sin(a) * 3.4 * lift,
+        this.pos.y + PLAYER.eye + 1.1 * lift,
+        this.pos.z + Math.cos(a) * 3.4 * lift,
+      );
+      this.camera.lookAt(
+        this.pos.x - Math.sin(this.yaw) * cp * 6 * (1 - lift),
+        this.pos.y + 1.3 + (PLAYER.eye - 1.3 + Math.sin(this.pitch) * 6) * (1 - lift),
+        this.pos.z - Math.cos(this.yaw) * cp * 6 * (1 - lift),
+      );
+    }
     this.camera.fov += (this.fovTarget - this.camera.fov) * Math.min(1, 14 * dt);
     this.camera.updateProjectionMatrix();
 

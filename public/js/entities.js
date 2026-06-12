@@ -3,6 +3,7 @@
 import * as THREE from 'three';
 import { CLASSES, ENC, BOTS } from '/shared/constants.js';
 import { Interp } from './enemies.js';
+import { buildWeaponProp } from './weapons.js';
 
 const noRay = (o) => { o.raycast = () => {}; return o; };
 
@@ -70,7 +71,19 @@ const G_KEY_MAT = new THREE.MeshBasicMaterial({ color: 0xffd34d });
 const G_BEACON_MAT = new THREE.MeshBasicMaterial({ color: 0x7ae582, transparent: true, opacity: 0.35,
   side: THREE.DoubleSide, depthWrite: false }); // cloned per guardian (opacity pulses while downed)
 
-export function buildGuardian(name, cls, phantom = false) {
+// Weapon-prop slots on the guardian model: the held weapon rides the right
+// hand line (muzzle forward — local +Z is the guardian's front, viewmodels
+// point -Z, hence the π yaw), the other two stow crossed on the back, muzzles
+// up over the shoulders. The anchor group takes the slot transform; the prop
+// inside takes the stand-up pitch, so the back tilt reads as a cross instead
+// of a barrel roll.
+const KIT_HELD = { p: [0.36, 1.26, 0.3], pitch: 0.06 };
+const KIT_BACK = [
+  { p: [-0.17, 1.38, -0.56], tilt: 0.38 },
+  { p: [0.17, 1.38, -0.56], tilt: -0.38 },
+];
+
+export function buildGuardian(name, cls, phantom = false, kit = null) {
   const col = new THREE.Color(CLASSES[cls]?.color || '#ffffff');
   const g = new THREE.Group();
   const lightLine = new THREE.MeshBasicMaterial({ color: col }); // Tron accent, class-colored
@@ -96,8 +109,48 @@ export function buildGuardian(name, cls, phantom = false) {
   studR.position.x = 0.46;
   const crest = noRay(new THREE.Mesh(G_GEO.crest, lightLine));
   crest.position.set(0, 2.16, 0);
+  // weapon kit display — real props when the loadout is known (snapshot `wp`),
+  // the legacy stub gun otherwise (warmup guardians, pre-first-snapshot)
+  const wr = new THREE.Group();
+  let props = [], held = -1;
+  function layoutKit() {
+    let slot = 0;
+    props.forEach((a, j) => {
+      const w = a.children[0];
+      if (j === held) {
+        a.position.set(...KIT_HELD.p);
+        a.rotation.set(0, Math.PI, 0);
+        w.rotation.set(KIT_HELD.pitch, 0, 0);
+        w.scale.setScalar(1);
+      } else {
+        const s = KIT_BACK[Math.min(slot++, 1)];
+        a.position.set(...s.p);
+        a.rotation.set(0, 0, s.tilt);
+        w.rotation.set(Math.PI / 2, 0, 0);
+        w.scale.setScalar(0.92); // stowed reads tidier slightly shrunk
+      }
+    });
+  }
+  function setKit(keys) {
+    wr.clear();
+    props = (keys || []).map(k => {
+      const a = new THREE.Group();
+      a.add(buildWeaponProp(k));
+      wr.add(a);
+      return a;
+    });
+    gun.visible = props.length === 0;
+    held = Math.max(0, held);
+    layoutKit();
+  }
+  function setHeld(i) {
+    if (i === held || i < 0 || i >= props.length) return;
+    held = i;
+    layoutKit();
+  }
   const gun = noRay(new THREE.Mesh(G_GEO.gun, suitMat));
   gun.position.set(0.3, 1.4, 0.5);
+  if (kit) setKit(kit);
   // auric key marker — everyone can see who holds the well key
   const key = noRay(new THREE.Mesh(G_GEO.key, G_KEY_MAT));
   key.position.y = 3.1; key.visible = false;
@@ -110,8 +163,8 @@ export function buildGuardian(name, cls, phantom = false) {
   const beacon = noRay(new THREE.Mesh(G_GEO.beacon, G_BEACON_MAT.clone()));
   beacon.position.y = 15;
   beacon.visible = false;
-  g.add(body, head, visor, trim, ankle, spine, core, studL, studR, crest, gun, key, tag, beacon);
-  return { g, key, tag, body, beacon };
+  g.add(body, head, visor, trim, ankle, spine, core, studL, studR, crest, gun, wr, key, tag, beacon);
+  return { g, key, tag, body, beacon, wr, setKit, setHeld };
 }
 
 // NOTE: transient entities (projectiles, orbs, chest) must NOT carry
@@ -355,13 +408,18 @@ export class EntityManager {
       seenP.add(p.id);
       let v = this.guardians.get(p.id);
       if (!v) {
-        v = { ...buildGuardian(p.name, p.cls, !!p.bt), interp: new Interp(), data: p };
+        v = { ...buildGuardian(p.name, p.cls, !!p.bt, p.wp), interp: new Interp(), data: p,
+          kitSig: (p.wp || []).join() };
         v.glow = this.glowPool.find(l => !l.userData.used) || null;
         if (v.glow) v.glow.userData.used = true;
         this.scene.add(v.g);
         this.guardians.set(p.id, v);
       }
       v.data = p;
+      // kit re-pick (lobby redeploy) rebuilds the props; held swaps just re-slot
+      const sig = (p.wp || []).join();
+      if (sig !== v.kitSig) { v.kitSig = sig; v.setKit(p.wp); }
+      v.setHeld(p.cw || 0);
       v.interp.push(p.p, p.yaw, snap.now); // server-time stamp (see Interp)
     }
     for (const [id, v] of this.guardians) {
@@ -530,6 +588,7 @@ export class EntityManager {
       }
       v.body.rotation.z = d.dn ? Math.PI / 2 : 0;
       v.body.position.y = d.dn ? 0.5 : 1.1;
+      v.wr.visible = !d.dn; // a downed body lies sideways — floating props read wrong
       v.beacon.visible = !!d.dn;
       if (d.dn) v.beacon.material.opacity = 0.28 + Math.sin(this.t * 5) * 0.12;
     }

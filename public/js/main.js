@@ -64,7 +64,8 @@ const rebuildShowcase = () => { showcaseDirty = true; };
 function refreshShowcase() {
   showcaseDirty = false;
   showGroup.clear();
-  const gv = buildGuardian($('nameInput').value.trim() || 'GUARDIAN', selectedClass);
+  const gv = buildGuardian($('nameInput').value.trim() || 'GUARDIAN', selectedClass, false,
+    [loadoutSel.primary, loadoutSel.special, loadoutSel.heavy]);
   gv.g.position.set(0.9, 0, 0);
   showGroup.add(gv.g);
   [loadoutSel.primary, loadoutSel.special, loadoutSel.heavy].forEach((key, i) => {
@@ -254,7 +255,8 @@ const remoteProjs = [];
 let selfBody = null;
 const rebuildSelfBody = (name) => {
   if (selfBody) scene.remove(selfBody.g);
-  selfBody = buildGuardian(name, selectedClass);
+  selfBody = buildGuardian(name, selectedClass, false,
+    [loadoutSel.primary, loadoutSel.special, loadoutSel.heavy]);
   selfBody.tag.visible = false; // your own name floating overhead reads wrong
   selfBody.g.visible = false;
   scene.add(selfBody.g);
@@ -274,7 +276,7 @@ $('deployBtn').onclick = async () => {
 
   if (joined) {
     // returning from the post-victory selection screen: same connection, new kit
-    net.send({ t: 'loadout', cls: selectedClass });
+    net.send({ t: 'loadout', cls: selectedClass, weapons: keys });
     weapons.setLoadout(keys);
     rebuildSelfBody(name);
     player.teleportToSpawn();
@@ -288,7 +290,7 @@ $('deployBtn').onclick = async () => {
   $('connStatus').textContent = 'LINKING TO THE VAULT…';
   audio.init();
   try {
-    await net.connect(name, selectedClass);
+    await net.connect(name, selectedClass, keys);
   } catch (err) {
     $('connStatus').textContent = err.message.toUpperCase();
     $('deployBtn').disabled = false;
@@ -960,6 +962,7 @@ function loop() {
         const hover = Math.sin(Math.min(1, player.cineK / 0.56) * Math.PI) * 0.45;
         selfBody.g.position.set(player.pos.x, player.pos.y + hover, player.pos.z);
         selfBody.g.rotation.y = player.yaw + Math.PI;
+        selfBody.setHeld(weapons.cur); // no-op unless the slot changed
       }
       selfBody.g.visible = on;
     }

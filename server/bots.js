@@ -73,10 +73,10 @@ export class BotManager {
       if (dxz(p.pos, s.p) > BOTS.summonR) continue;
       if (g.players.size >= MAX_PLAYERS) { g.toast('The circle is full.', 'warn'); return true; }
       this.signs.delete(id);
-      const bot = g.addPlayer('bot' + (nextBotN++), s.name, s.cls, true);
+      const entry = BOTS.roster.find(r => r.name === s.name);
+      const bot = g.addPlayer('bot' + (nextBotN++), s.name, s.cls, true, entry.weapons);
       bot.pos = [s.p[0], 0, s.p[2]];
       bot.yaw = Math.atan2(-s.p[0], -s.p[2]); // rises facing the arena heart
-      const entry = BOTS.roster.find(r => r.name === s.name);
       this.brains.set(bot.id, this.mkBrain(bot, entry));
       // clients play the materialization flare off this; the toast names them
       g.send(null, { t: 'summon', id: bot.id, name: s.name, cls: s.cls, p: [...bot.pos] });
@@ -346,16 +346,21 @@ export class BotManager {
     return [best.p[0] + ux * (best.r + 1.4), 0, best.p[2] + uz * (best.r + 1.4)];
   }
 
-  // Jump the surge sweep: leave the ground when a beam line will cross our
-  // angular position right as the hop peaks (clears sweepMaxY ~0.18 s in).
+  // Jump the surge sweep: signal when a beam line will cross our PREDICTED
+  // position (we strafe while fighting — the current angle lies) inside the
+  // hop's protected window. integrate() turns the signal into a ground jump
+  // or the mid-air re-boost (the double jump every guardian owns) — without
+  // the second jump, a beam crossing during the descent of a hop for the
+  // OTHER beam always connected.
   sweepJump(b) {
     const g = this.game, sw = g.enc.sweep, p = b.p;
-    if (!sw || g.t < sw.armAt - 0.4 || b.y > 0) return false;
-    const r = Math.hypot(p.pos[0], p.pos[2]);
-    if (r < 0.5) return false;
-    const th = Math.atan2(p.pos[2], p.pos[0]);
-    for (const [a, w] of [[sw.a1, sw.w1], [sw.a2, sw.w2]]) {
-      for (const dtu of [0.22, 0.34, 0.46]) {
+    if (!sw || g.t < sw.armAt - 0.4) return false;
+    for (const dtu of [0.22, 0.34, 0.46]) {
+      const x = p.pos[0] + p.vel[0] * dtu, z = p.pos[2] + p.vel[2] * dtu;
+      const r = Math.hypot(x, z);
+      if (r < 0.5) continue;
+      const th = Math.atan2(z, x);
+      for (const [a, w] of [[sw.a1, sw.w1], [sw.a2, sw.w2]]) {
         let d = ((th - (a + w * dtu)) % Math.PI + Math.PI) % Math.PI;
         if (d > Math.PI / 2) d = Math.PI - d;
         if (r * Math.sin(d) < ENC.sweepWidth + 0.9) return true;
@@ -485,12 +490,20 @@ export class BotManager {
     p.pos[0] += p.vel[0] * dt;
     p.pos[2] += p.vel[2] * dt;
     // hop arc — server-written y, rendered straight off the snapshot like the
-    // husk pounce (no protocol change)
-    if (mv.jump && b.y <= 0) { b.vy = PLAYER.jumpVel; b.y = 0.001; }
+    // husk pounce (no protocol change). Players get a double jump; so do
+    // echoes: one mid-air re-boost while descending into the beam band, then
+    // it re-arms on landing.
+    if (mv.jump) {
+      if (b.y <= 0) { b.vy = PLAYER.jumpVel; b.y = 0.001; b.dblJumped = false; }
+      else if (!b.dblJumped && b.vy < 0 && b.y < ENC.sweepMaxY + 0.6) {
+        b.vy = PLAYER.jumpVel;
+        b.dblJumped = true;
+      }
+    }
     if (b.y > 0) {
       b.vy -= PLAYER.gravity * dt;
       b.y = Math.max(0, b.y + b.vy * dt);
-      if (b.y === 0) b.vy = 0;
+      if (b.y === 0) { b.vy = 0; b.dblJumped = false; }
     }
     p.pos[1] = b.y;
     // arena wall
@@ -570,7 +583,32 @@ export class BotManager {
       const d = dxz(p.pos, en.pos);
       if (d > 60) continue;
       let s = 0;
-      if (en.type === 'seeker') s = 100 - d + (en.target === p.id ? 30 : 10);
+      if (en.type === 'seeker') {
+        // defense, not trivialization: notice the missile late (it pops off
+        // the back unseen), engage only your own hunter or one genuinely
+        // close, and favor peeling the ones hunting guardians of flesh
+        const mine = en.target === p.id;
+        const age = g.t - ((en.dieAt ?? g.t) - ENC.seekerLife);
+        if (age < BOTS.seekerNotice) continue;
+        if (!mine) {
+          // peeling is a last-moment assist, never an automated screen: only
+          // missiles hunting a HUMAN, only once they bear down on them, and
+          // only ONE interceptor squad-wide — a converging salvo flies one
+          // line, so any earlier kill chain-cooks the entire wave and the
+          // mechanic stops threatening anyone. Echoes being hunted handle
+          // their own missile (the designed sprint + fire counterplay).
+          const prey = g.players.get(en.target);
+          if (!prey || prey.bot || dxz(en.pos, prey.pos) > BOTS.seekerAssistR) continue;
+          let peelerBusy = false;
+          for (const ob of this.brains.values()) {
+            if (ob === b || !ob.target || ob.target === 'boss') continue;
+            const ot = g.enemies.get(ob.target);
+            if (ot && ot.type === 'seeker' && ot.target !== ob.p.id) { peelerBusy = true; break; }
+          }
+          if (peelerBusy) continue;
+        }
+        s = 100 - d + (mine ? 30 : 22);
+      }
       else if (en.type === 'husk') s = 58 - d + (d < 9 ? 25 : 0) + (p.cls === 'voidcaller' ? 8 : 0);
       else if (en.type === 'acolyte') s = 55 - d * 0.8 + (p.cls === 'voidcaller' ? 8 : 0);
       else if (en.type === 'wisp') s = 52 - d * 0.8;
@@ -595,6 +633,7 @@ export class BotManager {
     }
     if (want !== b.wkey) {
       b.wkey = want;
+      b.p.curW = Math.max(0, b.entry.weapons.indexOf(want)); // snapshot `cw` — clients show the swap
       b.shots = WEAPONS[want].mag;
       b.nextShotAt = Math.max(b.nextShotAt, this.game.t + 0.45); // swap time
     }
@@ -657,8 +696,10 @@ export class BotManager {
     ]);
     g.send(null, { t: 'pf', id: p.id, w: b.wkey, from: eye.map(rnd2), dir: dir.map(rnd2) });
     const A = BOTS.acc[b.wkey] || { hit: 0.7, crit: 0.2 };
-    // the boss is a barn door; small strafing bodies are genuinely hard to track
-    const pHit = b.target === 'boss' ? Math.min(0.97, A.hit + 0.15) : A.hit * (small ? BOTS.addAcc : 1);
+    // the boss is a barn door; small strafing bodies are hard to track, and a
+    // darting warhead is harder still
+    const pHit = b.target === 'boss' ? Math.min(0.97, A.hit + 0.15)
+      : A.hit * (small ? BOTS.addAcc : en && en.type === 'seeker' ? BOTS.seekerAcc : 1);
     if (Math.random() > pHit) return;
     let dmg;
     if (W.pellets) {

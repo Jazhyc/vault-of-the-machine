@@ -1942,4 +1942,56 @@ const slay = (g, id) => { while (g.enemies.has(id)) g.onMessage('p1', { t: 'hit'
   ok('full clear with five echoes: mechanics, burn, obliteration, surge, victory');
 }
 
+// ---------- weapon kits in the snapshot (wp/cw — guardian model dressing) ----------
+{
+  const g = mkGame();
+  g.addPlayer('p1', 'Kitted', 'gunslinger', false, ['hand', 'shotgun', 'lmg']);
+  g.addPlayer('p2', 'Hacker', 'sentinel', false, ['hand', 'nuke', 'lmg']); // unknown key → default kit
+  g.addPlayer('p3', 'Legacy', 'voidcaller'); // no kit sent → default kit
+
+  g.broadcastSnapshot();
+  let snap = msgs.findLast(x => x.m.t === 'snap').m;
+  const sp = (id) => snap.players.find(p => p.id === id);
+  assert.deepEqual(sp('p1').wp, ['hand', 'shotgun', 'lmg'], 'snapshot carries the joined kit');
+  assert.deepEqual(sp('p2').wp, ['auto', 'sniper', 'rocket'], 'an invalid kit falls back to the default');
+  assert.deepEqual(sp('p3').wp, ['auto', 'sniper', 'rocket'], 'a kitless join gets the default');
+  assert.equal(sp('p1').cw, 0, 'everyone starts on the primary');
+
+  // the held slot rides the state report; junk values are ignored
+  g.onMessage('p1', { t: 'state', pos: [60, 0, 25], yaw: 0, pitch: 0, cw: 2 });
+  g.onMessage('p3', { t: 'state', pos: [60, 0, 25], yaw: 0, pitch: 0, cw: 7 });
+  g.broadcastSnapshot();
+  snap = msgs.findLast(x => x.m.t === 'snap').m;
+  assert.equal(sp('p1').cw, 2, 'state reports update the held slot');
+  assert.equal(sp('p3').cw, 0, 'out-of-range slots are ignored');
+
+  // loadout re-pick swaps the kit (and re-holsters to primary) in LOBBY only
+  g.onMessage('p1', { t: 'loadout', cls: 'sentinel', weapons: ['auto', 'sniper', 'lmg'] });
+  assert.deepEqual(g.players.get('p1').weapons, ['auto', 'sniper', 'lmg'], 'lobby re-kit applies');
+  assert.equal(g.players.get('p1').curW, 0, 're-kit re-holsters to the primary');
+  g.enterMech(1);
+  g.onMessage('p1', { t: 'loadout', cls: 'sentinel', weapons: ['hand', 'shotgun', 'rocket'] });
+  assert.deepEqual(g.players.get('p1').weapons, ['auto', 'sniper', 'lmg'], 'mid-raid re-kit is rejected');
+  ok('weapon kits: join validation, snapshot wp/cw, state slot, lobby-only re-kit');
+}
+
+// echo guardians carry their roster kits and swap held slots through pickWeapon
+{
+  const g = mkGame();
+  g.addPlayer('p1', 'Summoner', 'gunslinger');
+  moveTo(g, 'p1', ENC.banner.pos);
+  g.onMessage('p1', { t: 'interact' }); // plant the banner → soul-signs appear
+  const sign = [...g.bots.signs.values()].find(s => s.name === 'Saint-14');
+  moveTo(g, 'p1', sign.p);
+  g.onMessage('p1', { t: 'interact' });
+  const bot = [...g.players.values()].find(p => p.bot);
+  assert.deepEqual(bot.weapons, ['auto', 'shotgun', 'lmg'], "the echo wears Saint-14's roster kit");
+  const brain = g.bots.brains.get(bot.id);
+  brain.target = 'boss';
+  g.bots.pickWeapon(brain);
+  assert.equal(brain.wkey, 'lmg', 'Saint-14 hoses the boss with the lmg');
+  assert.equal(bot.curW, 2, 'the swap shows in the snapshot held slot');
+  ok('echo kits: roster weapons in the snapshot, pickWeapon drives cw');
+}
+
 console.log('\nAll encounter tests passed.');

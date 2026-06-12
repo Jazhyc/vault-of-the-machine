@@ -361,6 +361,15 @@ export const BOTS = {
   burst: { auto: 8, lmg: 10, hand: 3, sniper: 2, shotgun: 2 }, // pulls per burst vs adds
   burstRest: [0.5, 1.1], // settle seconds between those bursts
   spreadFire: 12,       // target-score penalty per other echo already on it
+  // Seekers: echoes DEFEND, they don't trivialize. An echo always fights the
+  // missile hunting IT (sprint + fire is the designed counterplay), but other
+  // missiles are peeled by at most ONE interceptor, only when they hunt a
+  // HUMAN, and only inside seekerAssistR of that human — a converging salvo
+  // flies one line, so any earlier kill chain-cooks the whole wave and the
+  // mechanic never threatens anyone (five echoes used to delete every salvo
+  // at the boss's back). seekerNotice delays the first reaction past the pop
+  // arc (0.9 s); seekerAcc taxes tracking a darting warhead.
+  seekerNotice: 1.6, seekerAssistR: 12, seekerAcc: 0.65,
   retarget: 0.3,   // target re-evaluation cadence (s)
   rocketCd: 4.5,   // self-imposed rocket spacing (mag 1 + reload ≈ this anyway)
   // a voidcaller spends its nova on adds only when the arena is genuinely

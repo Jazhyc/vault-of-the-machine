@@ -87,7 +87,7 @@ wss.on('connection', (ws) => {
       id = 'p' + nextConnId++;
       sockets.set(id, ws);
       const cls = CLASSES[m.cls] ? m.cls : 'gunslinger';
-      const p = game.addPlayer(id, m.name, cls);
+      const p = game.addPlayer(id, m.name, cls, false, m.weapons);
       ws.send(JSON.stringify({ t: 'welcome', id, gj: game.gjallyOwners.has(p.name) }));
       game.broadcastSnapshot();
       return;

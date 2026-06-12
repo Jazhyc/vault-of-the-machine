@@ -7,16 +7,17 @@ export class Net {
     this.myId = null;
     this.connected = false;
     this.handlerMs = 0; // ws-handler time since last frame (spike profiler reads & resets)
+    this.cw = 0; // held weapon slot, kept fresh by WeaponSystem — rides every state report
   }
 
   on(type, fn) { this.handlers[type] = fn; }
 
-  connect(name, cls) {
+  connect(name, cls, weapons) {
     return new Promise((resolve, reject) => {
       const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
       const ws = new WebSocket(`${proto}//${location.host}`);
       this.ws = ws;
-      ws.onopen = () => this.send({ t: 'join', name, cls });
+      ws.onopen = () => this.send({ t: 'join', name, cls, weapons });
       ws.onmessage = (ev) => {
         const t0 = performance.now();
         let m;
@@ -44,7 +45,7 @@ export class Net {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(obj));
   }
 
-  sendState(pos, yaw, pitch) { this.send({ t: 'state', pos, yaw, pitch }); }
+  sendState(pos, yaw, pitch) { this.send({ t: 'state', pos, yaw, pitch, cw: this.cw }); }
   fire(w, from, dir) { this.send({ t: 'fire', w, from, dir }); }
   hit(target, dmg, weapon) { this.send({ t: 'hit', target, dmg, weapon }); }
   explode(kind, p) { this.send({ t: 'explode', kind, p }); }

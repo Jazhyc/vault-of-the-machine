@@ -127,9 +127,14 @@ the same seeded panel-drag arc from server time), `heraldRise`, `wardBuff` (priv
 `wormhole`, `missile`, `seekers`, `seekerBoom`, `voidOrb`, `healBurst`, `banner`, `restock` (private), …) are separate
 messages; a broadcast with `exclude: playerId` skips the sender (stripped in `server/main.js`).
 Client→server: `state`, `fire`, `hit`, `explode`, `superCast`, `interact`, `loadout`, and
-`sigil {i}` (toggle sky-lattice node i; validated st/stage/index server-side). Snapshot player
+`sigil {i}` (toggle sky-lattice node i; validated st/stage/index server-side). Weapon kits are
+cosmetic to the server but it relays them so every client can dress remote guardian models:
+`join`/`loadout` carry `weapons` (3 keys, validated by `sanitizeKit` — junk falls back to the
+default kit; mid-raid `loadout` is rejected wholesale) and `state` carries `cw` (held slot 0–2,
+kept fresh by `WeaponSystem` via `net.cw`). Snapshot player
 fields are abbreviated: `p` pos, `dn` downed, `dd` dead, `gu` goldenUntil, `av` antiviral stacks,
 `ky` holds auric key, `wb` wardbreaker-buff end, `rv/rt` revive end/target, `sup` super %,
+`wp/cw` weapon kit + held slot (bots report their roster kits, `pickWeapon` drives `cw`),
 `bt` echo-guardian flag (clients render those as gold phantoms). The snapshot also carries
 `signs` (id-keyed `{name, cls, p}` soul-signs, LOBBY-only), and `summon {id, name, cls, p}` is
 a one-shot broadcast (class-colored flare client-side; the server toast names the echo). `enc.focus` is the hard-focused
@@ -476,6 +481,13 @@ Standing rules derived from the above:
   tracked via `prevHp` in main.js).
 - Viewmodels (`buildViewmodel`) carry `userData.muzzle` (tracer/flash origin) and `userData.flash`;
   the lobby showcase reuses these builders plus `buildGuardian` from `entities.js`.
+- **Guardian models wear their real kit** (`buildGuardian(name, cls, phantom, kit)`): the held
+  weapon rides the right hand, the other two stow crossed on the back, driven by snapshot
+  `wp`/`cw` (remotes), `loadoutSel` (selfBody + showcase). Props come from `buildWeaponProp`
+  (weapons.js): mesh-share clones of one cached viewmodel template per key — instances allocate
+  only Mesh wrappers, all templates pre-drawn in `buildWeaponFxWarmup`. `setKit` rebuilds the
+  props (kit re-pick), `setHeld` re-slots them (no-op when unchanged — safe to call per sync);
+  the prop root hides while downed (the body lies sideways).
 
 ### Testing conventions
 

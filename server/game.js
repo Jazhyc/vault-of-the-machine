@@ -83,9 +83,18 @@ export class Game {
 
   // ---------- players ----------
 
-  addPlayer(id, name, cls, bot = false) {
+  // Weapon kits are client-chosen and cosmetic to the server (hit damage is
+  // capped per weapon key regardless), but they ride the snapshot (`wp`/`cw`)
+  // so every client can dress remote guardians in their real loadout.
+  sanitizeKit(w) {
+    return Array.isArray(w) && w.length === 3 && w.every(k => typeof k === 'string' && WEAPONS[k])
+      ? [...w] : ['auto', 'sniper', 'rocket'];
+  }
+
+  addPlayer(id, name, cls, bot = false, weapons = null) {
     const p = {
       id, name: String(name).slice(0, 16) || 'Guardian', cls, bot,
+      weapons: this.sanitizeKit(weapons), curW: 0,
       pos: [...ARENA.spawn], yaw: ARENA.spawnYaw, pitch: 0,
       hp: PLAYER.maxHp, lastDmg: -99, downed: false, dead: false,
       sup: 0, goldenUntil: 0, pendingNova: false, castUntil: 0,
@@ -146,6 +155,7 @@ export class Game {
         p.lastStateAt = this.t;
         p.pos = next;
         p.yaw = Number(m.yaw) || 0; p.pitch = Number(m.pitch) || 0;
+        if (m.cw === 0 || m.cw === 1 || m.cw === 2) p.curW = m.cw; // held weapon slot (cosmetic)
         break;
       }
       case 'fire': // cosmetic relay so others see tracers / hear shots
@@ -156,8 +166,11 @@ export class Game {
       case 'superCast': this.onSuperCast(p, m); break;
       case 'interact': this.onInteract(p); break;
       case 'sigil': this.onSigil(p, m); break;
-      case 'loadout': // class re-pick from the selection screen, lobby only
-        if (this.enc.st === 'LOBBY' && CLASSES[m.cls]) p.cls = m.cls;
+      case 'loadout': // class/kit re-pick from the selection screen, lobby only
+        if (this.enc.st === 'LOBBY' && CLASSES[m.cls]) {
+          p.cls = m.cls;
+          if (m.weapons) { p.weapons = this.sanitizeKit(m.weapons); p.curW = 0; }
+        }
         break;
     }
   }
@@ -1675,6 +1688,7 @@ export class Game {
         hp: Math.round(p.hp), sup: Math.round(p.sup * 10) / 10,
         dn: p.downed, dd: p.dead, gu: p.goldenUntil,
         av: p.antiviral, ky: p.hasKey, wb: p.wardUntil,
+        wp: p.weapons, cw: p.curW, // kit + held slot — clients dress the guardian model
         rv: p.revive ? p.revive.end : 0, rt: p.revive ? p.revive.target : null,
         ...(p.bot ? { bt: 1 } : null), // echoes render as phantoms client-side
       })),

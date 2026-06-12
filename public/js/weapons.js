@@ -14,13 +14,16 @@ const WOLF_MAT = new THREE.MeshBasicMaterial({ color: 0x9dffc8 });
 const SWARM_MAT = new THREE.MeshBasicMaterial({ color: 0xffc94d }); // gunslinger grenade embers
 const NOVA_SWARM_MAT = new THREE.MeshBasicMaterial({ color: 0xc77dff }); // voidcaller nova shards
 
-// Drawn once at boot so the shared projectile/wolf buffers are pre-uploaded.
+// Drawn once at boot so the shared projectile/wolf buffers are pre-uploaded —
+// and every third-person weapon prop template with them (guardians wear their
+// kit; a mid-session join must not pay the geometry upload).
 export function buildWeaponFxWarmup() {
   const g = new THREE.Group();
   g.add(new THREE.Mesh(PROJ_GEO, WOLF_MAT));
   g.add(new THREE.Mesh(WOLF_GEO, WOLF_MAT));
   g.add(new THREE.Mesh(WOLF_GEO, SWARM_MAT));
   g.add(new THREE.Mesh(WOLF_GEO, NOVA_SWARM_MAT));
+  for (const k of Object.keys(WEAPONS)) g.add(buildWeaponProp(k));
   return g;
 }
 
@@ -174,6 +177,25 @@ export function buildViewmodel(key) {
   return noRay(g);
 }
 
+// Third-person weapon props for guardian models (entities.js): mesh-share
+// clones of one cached viewmodel template per key — instances allocate only
+// Mesh wrappers, never geometry/materials (perf playbook). The muzzle/flash
+// subtree is deliberately dropped (props never fire).
+const PROP_TEMPLATES = new Map();
+export function buildWeaponProp(key) {
+  if (!PROP_TEMPLATES.has(key)) PROP_TEMPLATES.set(key, buildViewmodel(key));
+  const g = new THREE.Group();
+  for (const c of PROP_TEMPLATES.get(key).children) {
+    if (!c.isMesh) continue; // skips the muzzle anchor (and its flash group)
+    const m = new THREE.Mesh(c.geometry, c.material);
+    m.position.copy(c.position);
+    m.rotation.copy(c.rotation);
+    m.scale.copy(c.scale);
+    g.add(m);
+  }
+  return noRay(g);
+}
+
 export class WeaponSystem {
   constructor(ctx, loadout = ['auto', 'sniper', 'rocket']) {
     this.ctx = ctx; // { camera, scene, targets, net, effects, audio, player, hud, getEnc, enemies }
@@ -237,6 +259,7 @@ export class WeaponSystem {
       return m;
     });
     this.cur = 0;
+    this.ctx.net.cw = 0; // remote guardians show the held slot via state reports
     this.reloadEnd = 0;
     this.switchEnd = 0;
     this.pendingSuper = null; // a re-kit mid-flourish must not throw a stale nova
@@ -250,6 +273,7 @@ export class WeaponSystem {
   switchTo(i) {
     if (i === this.cur || !this.ctx.player.alive) return;
     this.cur = i;
+    this.ctx.net.cw = i;
     this.reloadEnd = 0;
     this._patIdx = 0;
     this.switchEnd = this.now + 0.25;

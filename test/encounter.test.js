@@ -567,8 +567,14 @@ const slay = (g, id) => { while (g.enemies.has(id)) g.onMessage('p1', { t: 'hit'
   assert.equal(g.enc.bossHp, before2, 'nova without cast rejected');
   p.sup = 100;
   g.onMessage('p1', { t: 'superCast', dir: [0, 0, -1] });
+  const far = g.spawnEnemy('acolyte', [12, 0, 0]); // ~13.9 m from the blast — beyond the old 9 m wave
   g.onMessage('p1', { t: 'explode', kind: 'nova', p: [0, 8, 0] });
   assert.ok(g.enc.bossHp < before2, 'real nova lands');
+  assert.ok(!g.enemies.has(far.id), 'the widened wave erases distant adds');
+  // nova shards land as ordinary client hits — capped like any weapon
+  const before3 = g.enc.bossHp;
+  g.onMessage('p1', { t: 'hit', target: 'boss', dmg: 999999, weapon: 'nswarm' });
+  assert.ok(before3 - g.enc.bossHp <= DMG_CAPS.nswarm, 'nova shard damage capped');
   ok('anti-cheat caps & nova gating');
 }
 

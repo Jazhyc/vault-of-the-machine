@@ -33,7 +33,7 @@ export const PLAYER = {
 
 export const CLASSES = {
   voidcaller: { name: 'Voidcaller', color: '#9d4edd', superName: 'Nova Burst',
-    desc: 'Hurl a void singularity that devastates everything near its impact. Grenades leave a gnawing void orb behind.' },
+    desc: 'Hurl a void singularity that detonates in a vast wave and looses eight hunting shards. Grenades leave a gnawing void orb behind.' },
   gunslinger: { name: 'Gunslinger', color: '#ffb703', superName: 'Golden Volley',
     desc: 'For 9 seconds your weapons deal 3.5x damage. Melt the boss. Grenades burst into four hunting embers.' },
   sentinel:   { name: 'Sentinel', color: '#4cc9f0', superName: 'Ward Aegis',
@@ -109,7 +109,12 @@ export const MELEE = { dmg: 70, range: 2.8, cd: 1.2 };
 
 export const SUPER = {
   passiveRate: 0.8, perDamage: 1 / 220, perKill: 4, perSigil: 20,
-  nova:   { kind: 'nova',   dmg: 2600, r: 9, speed: 26 },
+  // nova budget: the core blast traded raw punch (was 2600 / 9 m) for a vast
+  // wave plus 8 homing shards (client-side wolfpack machinery landing as
+  // capped `nswarm` hits). Each shard one-shots an acolyte (160 hp); the wave's
+  // rim (falloff bottoms at 0.45× → 675) still erases every ordinary add, so
+  // only keepers and warded things survive the burst.
+  nova:   { kind: 'nova',   dmg: 1500, r: 16, speed: 26, swarm: { n: 8, dmg: 170, speed: 20 } },
   golden: { kind: 'golden', dur: 9, mul: 3.5 },
   ward:   { kind: 'ward',   dur: 12, r: 5.5, heal: 45, dr: 0.5 },
 };
@@ -117,7 +122,7 @@ export const CLASS_SUPER = { voidcaller: 'nova', gunslinger: 'golden', sentinel:
 
 // Server-side caps on a single client-reported hit, per weapon (pre-golden).
 // shotgun is per-trigger-pull (pellets aggregated client-side).
-export const DMG_CAPS = { auto: 25, sniper: 230, melee: 90, hand: 125, shotgun: 225, lmg: 52, gjally: 135, gswarm: 60 };
+export const DMG_CAPS = { auto: 25, sniper: 230, melee: 90, hand: 125, shotgun: 225, lmg: 52, gjally: 135, gswarm: 60, nswarm: 180 };
 
 export const ENEMIES = {
   // kb: knockback shove as [horizontal, vertical] m/s. The client computes

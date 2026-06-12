@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { SUPER } from '/shared/constants.js';
 
 const noRay = (o) => { o.raycast = () => {}; return o; };
 
@@ -150,8 +151,8 @@ export class Effects {
     b.light.color.set(col);
     b.light.position.copy(pos); // the light is scene-level, not a mesh child
     b.mesh.position.copy(pos);
-    b.r = big ? 9 : kind === 'grenade' ? 5 : kind === 'death' ? 2.5 : kind === 'seeker' ? 3.5 : kind === 'heal' ? 2.2 : 6.5;
-    b.max = big ? 0.7 : 0.4;
+    b.r = big ? SUPER.nova.r : kind === 'grenade' ? 5 : kind === 'death' ? 2.5 : kind === 'seeker' ? 3.5 : kind === 'heal' ? 2.2 : 6.5;
+    b.max = big ? 0.85 : 0.4; // the nova wave is huge — give it longer to swell
     b.life = b.max;
     b.mesh.visible = true;
     // Death pops are flash-only: an AoE multikill would otherwise drive all six

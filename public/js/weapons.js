@@ -12,6 +12,7 @@ const PROJ_MATS = new Map(); // color -> material
 const WOLF_GEO = new THREE.SphereGeometry(0.13, 8, 6);
 const WOLF_MAT = new THREE.MeshBasicMaterial({ color: 0x9dffc8 });
 const SWARM_MAT = new THREE.MeshBasicMaterial({ color: 0xffc94d }); // gunslinger grenade embers
+const NOVA_SWARM_MAT = new THREE.MeshBasicMaterial({ color: 0xc77dff }); // voidcaller nova shards
 
 // Drawn once at boot so the shared projectile/wolf buffers are pre-uploaded.
 export function buildWeaponFxWarmup() {
@@ -19,6 +20,7 @@ export function buildWeaponFxWarmup() {
   g.add(new THREE.Mesh(PROJ_GEO, WOLF_MAT));
   g.add(new THREE.Mesh(WOLF_GEO, WOLF_MAT));
   g.add(new THREE.Mesh(WOLF_GEO, SWARM_MAT));
+  g.add(new THREE.Mesh(WOLF_GEO, NOVA_SWARM_MAT));
   return g;
 }
 
@@ -506,8 +508,9 @@ export class WeaponSystem {
       life: 4, spd: d.wolfSpeed, dmg: d.wolfDmg, wkey: 'gjally', numKind: 'super' });
   }
 
-  // Gunslinger grenade: the blast hurls four embers that hunt the nearest
-  // damageable targets — distinct enemies first, the exposed boss as backstop.
+  // Swarm payloads (gunslinger grenade embers, voidcaller nova shards): the
+  // blast hurls homing bolts that hunt the nearest damageable targets —
+  // distinct enemies first, the exposed boss as backstop.
   acquireSwarmTargets(fromPos, n) {
     const cands = [];
     const wp = new THREE.Vector3();
@@ -524,11 +527,10 @@ export class WeaponSystem {
     return out;
   }
 
-  spawnSwarm(fromPos) {
-    const S = GRENADE.gunslinger.swarm;
+  spawnSwarm(fromPos, S, style) {
     const targets = this.acquireSwarmTargets(fromPos, S.n);
     for (let i = 0; i < S.n; i++) {
-      const mesh = new THREE.Mesh(WOLF_GEO, SWARM_MAT);
+      const mesh = new THREE.Mesh(WOLF_GEO, style.mat);
       mesh.scale.setScalar(1.5);
       mesh.raycast = () => {};
       mesh.position.copy(fromPos);
@@ -536,7 +538,7 @@ export class WeaponSystem {
       const a = (i / S.n) * Math.PI * 2;
       const dir = new THREE.Vector3(Math.cos(a) * 0.7, 1, Math.sin(a) * 0.7).normalize();
       this.wolves.push({ pos: fromPos.clone(), vel: dir.multiplyScalar(S.speed * 0.8), target: targets[i], mesh,
-        life: 4, spd: S.speed, dmg: S.dmg, wkey: 'gswarm', numKind: 'normal', boomCol: 0xffb703 });
+        life: 4, spd: S.speed, dmg: S.dmg, wkey: style.wkey, numKind: style.numKind, boomCol: style.boomCol });
     }
   }
 
@@ -658,9 +660,14 @@ export class WeaponSystem {
     this.ctx.effects.explosion(p.pos, kind, kind === 'grenade' ? this.clsColor() : null);
     this.ctx.audio.explosion(kind === 'nova');
     this.predictAoeNumbers(p.pos, kind);
+    if (kind === 'nova') {
+      this.spawnSwarm(p.pos, SUPER.nova.swarm,
+        { mat: NOVA_SWARM_MAT, wkey: 'nswarm', numKind: 'super', boomCol: 0x9d4edd });
+    }
     if (kind === 'grenade') {
       const cls = this.clsKey();
-      if (cls === 'gunslinger') this.spawnSwarm(p.pos);
+      if (cls === 'gunslinger') this.spawnSwarm(p.pos, GRENADE.gunslinger.swarm,
+        { mat: SWARM_MAT, wkey: 'gswarm', numKind: 'normal', boomCol: 0xffb703 });
       // the orb visual arrives via the server's voidOrb broadcast; this list
       // only mirrors the 0.5s gnaw ticks as predicted damage numbers
       if (cls === 'voidcaller') {

@@ -524,7 +524,9 @@ net.on('snap', (m) => {
       hud.toast('The Vault seals!', 'warn');
     }
     if (st === 'OBLIT') { hud.announce('OBLITERATION INCOMING', 'KINDLED LIGHT ENDURES'); audio.riser(); }
-    if (st === 'FINAL') { hud.announce('FINAL STAND', 'ITS LAST GENERATOR SCREAMS'); audio.roar(); }
+    // FINAL also crumbles the pillars (enc.pd → world.update sinks them);
+    // the shake sells the collapse — the roar/announce already cover the ears
+    if (st === 'FINAL') { hud.announce('FINAL STAND', 'ITS LAST GENERATOR SCREAMS'); audio.roar(); effects.shake(0.6); }
     if (st === 'DAMAGE') hud.announce('DAMAGE PHASE', 'UNLOAD EVERYTHING');
     if (st === 'LOBBY' && prevSt !== 'LOBBY') hud.endScreen(null);
     audio.intensity(st === 'DAMAGE' || st === 'FINAL' ? 1 : st === 'LOBBY' ? 0 : 0.35);
@@ -664,7 +666,9 @@ net.on('bossSlam', () => {
 });
 net.on('bossVolley', () => audio.volley());
 net.on('sweep', () => {
-  hud.announce('ARENA PARTITION', 'THE BEAMS HUNT LOW');
+  // standing pillars shadow the beams; the FINAL surge sweep has no stone
+  // left, so it hints the jump instead
+  hud.announce('ARENA PARTITION', snap?.enc.pd ? 'THE BEAMS HUNT LOW' : 'STONE SHADOWS SHELTER');
   audio.laser();
 });
 net.on('barrage', () => {

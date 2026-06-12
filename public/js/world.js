@@ -4,6 +4,11 @@ import { SIGIL_SEGMENTS } from '/shared/sigil.js';
 
 const noRay = (o) => { o.raycast = () => {}; return o; };
 
+// FINAL crumbles the pillars (snapshot enc.pd): collidePlayer is module-level
+// while the crumble animation lives in buildWorld's update, so the switch
+// they share sits here. True whenever the pillars stand.
+let pillarsSolid = true;
+
 const PED_COLS = ARENA.pedestals.map(p => new THREE.Color(p.color));
 const PILLAR_DEFAULT = new THREE.Color(0x8a5fff);
 const SCRAMBLE_CSS = 'rgba(150,200,255,0.9)'; // idle holograms drift in neutral blue
@@ -142,7 +147,14 @@ export function buildWorld(scene, targets) {
     grp.lookAt(pil.p[0] + ox * 50, 5.0, pil.p[2] + oz * 50);
     grp.traverse(o => { o.frustumCulled = false; }); // warm frame must upload all six
     world.add(grp); targets.push(grp);
-    return { bandMat, c, tex, holoMat };
+    return {
+      bandMat, c, tex, holoMat, m, h: pil.h,
+      // everything that sinks with the crumble, with its standing height
+      parts: [[m, pil.h / 2], [band, pil.h - 1.2], [base, 0.22], [grp, 5.0]],
+      // the raycastable solids (raycasts ignore visibility — a sunken pillar
+      // must not eat shots, so these swap to a noop while down)
+      ray: [m, back, wallT, wallB, wallL, wallR],
+    };
   });
   // paint the idle lattice now so all six texture uploads land in the boot
   // warm frame, not the first MECH frame
@@ -283,6 +295,7 @@ export function buildWorld(scene, targets) {
   const panelQueue = [];      // staggered repaints: canvas uploads burst-stall the GPU
   let scrambleAt = 0, scrambleIdx = 0; // idle hologram drift
   let gridActive = true;      // built live for the warm frame; first update() disarms it
+  let pilFallAt = -1;         // t when the FINAL pillar crumble began (-1 = standing)
   let wormT = 0;              // wormhole open/close ease
   const burnedCol = new THREE.Color(0xc02035);
   const deadCrystal = new THREE.Color(0x3a2a35);
@@ -328,6 +341,32 @@ export function buildWorld(scene, targets) {
     update(dt, enc, serverNow) {
       t += dt;
       const sig = enc ? enc.sig : null;
+
+      // --- pillar crumble: FINAL drops the sweep cover (snapshot `pd`) ---
+      // Driven declaratively off the flag so late joiners and the post-raid
+      // reset both land in the right state without a dedicated event.
+      const pd = !!(enc && enc.pd);
+      if (pd && pilFallAt < 0) {
+        pilFallAt = t;
+        pillarsSolid = false;
+        for (const pl of pillars) pl.ray.forEach(o => { o.raycast = () => {}; });
+      } else if (!pd && pilFallAt >= 0) {
+        pilFallAt = -1;
+        pillarsSolid = true;
+        for (const pl of pillars) {
+          pl.ray.forEach(o => { delete o.raycast; }); // back to the prototype raycast
+          pl.parts.forEach(([o, y0]) => { o.position.y = y0; o.visible = true; });
+          pl.m.rotation.set(0, 0, 0);
+        }
+      }
+      if (pilFallAt >= 0) {
+        pillars.forEach((pl, i) => {
+          const k = Math.min(1, Math.max(0, (t - pilFallAt - i * 0.13) / 1.2));
+          const dy = -(pl.h + 1.6) * k * k; // accelerating sink — the floor swallows the stone
+          pl.parts.forEach(([o, y0]) => { o.position.y = y0 + dy; o.visible = k < 1; });
+          pl.m.rotation.z = 0.1 * k * (i % 2 ? 1 : -1); // slight keel as it goes
+        });
+      }
 
       // --- sky lattice: live only while the twin wards stand ---
       const wantGrid = !!(sig && enc.st === 'MECH' && enc.stage === 'KEEPERS');
@@ -776,6 +815,7 @@ export function collidePlayer(pos, radius = 0.8) {
   const r = Math.hypot(pos.x, pos.z);
   const max = ARENA.radius - radius - 0.2;
   if (r > max) { pos.x *= max / r; pos.z *= max / r; }
+  if (!pillarsSolid) return; // FINAL sank the pillars — nothing left to bump
   for (const pil of ARENA.pillars) {
     const dx = pos.x - pil.p[0], dz = pos.z - pil.p[2];
     const d = Math.hypot(dx, dz), min = pil.r + radius;

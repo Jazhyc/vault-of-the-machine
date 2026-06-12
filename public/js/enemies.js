@@ -14,6 +14,24 @@ const _dir = new THREE.Vector3();
 export const KEEPER_DROP = { h: 14, dur: 1.0 };
 const ADD_GROW = 0.55; // husk/acolyte/wisp materialize window (s)
 
+// Sweep-ray clip fraction (of ARENA.radius): distance from the arena center
+// to the first standing pillar along ray angle `ang` (server convention —
+// direction (cos a, sin a) in x/z; the client mesh maps it via rotation.y =
+// -ang). Mirrors the server's losBlocked cover so the beam visibly dies on
+// the stone; full length once the pillars fell (snapshot enc.pd).
+function rayClip(ang, pd) {
+  if (pd) return 1;
+  const dx = Math.cos(ang), dz = Math.sin(ang);
+  let best = ARENA.radius;
+  for (const pil of ARENA.pillars) {
+    const proj = pil.p[0] * dx + pil.p[2] * dz;
+    if (proj <= 0 || proj >= best) continue;
+    const perp = Math.abs(pil.p[2] * dx - pil.p[0] * dz);
+    if (perp < pil.r) best = Math.min(best, proj - Math.sqrt(pil.r * pil.r - perp * perp));
+  }
+  return best / ARENA.radius;
+}
+
 // stretch a unit-cylinder mesh between two points (keeper sniper beams)
 function spanBeam(mesh, ax, ay, az, bx, by, bz, r) {
   _dir.set(bx - ax, by - ay, bz - az);
@@ -463,20 +481,26 @@ export class EnemyManager {
     this.scene.add(g);
     this.targets.push(body, core);
 
-    // sweep lasers: two full-diameter beams at shin height. Each is a thin
-    // white-hot core cylinder inside a glow sheath inside a barely-there haze
-    // sized to the real hit band (sweepWidth half-width — the laser must read
-    // thin without lying about where it wounds). Nested additive 3D volumes,
-    // not coplanar quads, so they sum without z-fighting. Geometries and
-    // materials are shared between both beams; the sheaths ride as children
-    // so the warmup's visible-toggle draws (and compiles) all three.
-    const beamCoreGeo = new THREE.CylinderGeometry(0.07, 0.07, 76, 8, 1, true).rotateZ(Math.PI / 2);
-    const beamGlowGeo = new THREE.CylinderGeometry(0.3, 0.3, 76, 8, 1, true).rotateZ(Math.PI / 2);
-    const beamHazeGeo = new THREE.CylinderGeometry(ENC.sweepWidth, ENC.sweepWidth, 76, 8, 1, true).rotateZ(Math.PI / 2);
+    // sweep lasers: two full-diameter beams at shin height, built as FOUR
+    // center-anchored rays (two per beam line) so each side can be shortened
+    // independently — standing pillars are hard cover (the server's losBlocked
+    // skips shadowed players), so the beam must visibly die on the stone
+    // (rayClip; once enc.pd says the pillars fell, rays run full length).
+    // Each ray: a thin white-hot core cylinder inside a glow sheath inside a
+    // barely-there haze sized to the real hit band (sweepWidth half-width —
+    // the laser must read thin without lying about where it wounds). Nested
+    // additive 3D volumes, not coplanar quads, so they sum without z-fighting.
+    // Geometries span 0..radius along +x (scale.x clips from the center) and
+    // are shared between all rays, as are the materials; the sheaths ride as
+    // children so the warmup's visible-toggle draws (and compiles) all three.
+    const rayLen = ARENA.radius;
+    const beamCoreGeo = new THREE.CylinderGeometry(0.07, 0.07, rayLen, 8, 1, true).rotateZ(Math.PI / 2).translate(rayLen / 2, 0, 0);
+    const beamGlowGeo = new THREE.CylinderGeometry(0.3, 0.3, rayLen, 8, 1, true).rotateZ(Math.PI / 2).translate(rayLen / 2, 0, 0);
+    const beamHazeGeo = new THREE.CylinderGeometry(ENC.sweepWidth, ENC.sweepWidth, rayLen, 8, 1, true).rotateZ(Math.PI / 2).translate(rayLen / 2, 0, 0);
     const beamMat = new THREE.MeshBasicMaterial({ color: 0xffe6ea, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending });
     const beamGlowMat = new THREE.MeshBasicMaterial({ color: 0xff3d5e, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending });
     const beamHazeMat = new THREE.MeshBasicMaterial({ color: 0xff3d5e, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending });
-    this.beams = [0, 1].map(() => {
+    this.beams = [0, 1, 2, 3].map(() => {
       const b = noRay(new THREE.Mesh(beamCoreGeo, beamMat));
       b.add(noRay(new THREE.Mesh(beamGlowGeo, beamGlowMat)));
       b.add(noRay(new THREE.Mesh(beamHazeGeo, beamHazeMat)));
@@ -778,9 +802,14 @@ export class EnemyManager {
       // raw snapshot angles step at 10 Hz; glide them by extrapolating with the
       // server's constant per-sweep angular velocities at the shared render delay
       const ext = renderTime - this.encAt;
-      this.beams[0].visible = this.beams[1].visible = true;
-      this.beams[0].rotation.y = -(sw.a1 + (sw.w1 || 0) * ext);
-      this.beams[1].rotation.y = -(sw.a2 + (sw.w2 || 0) * ext);
+      const a1 = sw.a1 + (sw.w1 || 0) * ext, a2 = sw.a2 + (sw.w2 || 0) * ext;
+      for (let i = 0; i < 4; i++) {
+        const ang = (i < 2 ? a1 : a2) + (i & 1) * Math.PI; // two opposite rays per beam line
+        const bm = this.beams[i];
+        bm.visible = true;
+        bm.rotation.y = -ang;
+        bm.scale.x = rayClip(ang, enc.pd);
+      }
       if (sw.on) {
         // live: near-white core, fast-flickering red sheath, faint hit-band haze
         this.beamMat.opacity = 0.95;
@@ -798,7 +827,7 @@ export class EnemyManager {
         this.beamHazeMat.opacity = 0.02 + pulse * 0.03;
       }
     } else if (this.beams[0].visible) {
-      this.beams[0].visible = this.beams[1].visible = false;
+      for (const bm of this.beams) bm.visible = false;
     }
     if (enc.bossDead) {
       b.light.intensity = 0;

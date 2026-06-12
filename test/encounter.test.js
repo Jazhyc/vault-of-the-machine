@@ -1503,4 +1503,55 @@ const slay = (g, id) => { while (g.enemies.has(id)) g.onMessage('p1', { t: 'hit'
   ok('per-class grenades: gunslinger burst + capped swarm, voidcaller ≈2x via orb, sentinel mend-orbs');
 }
 
+// ---------- sweep pillar cover & the FINAL crumble ----------
+{
+  const g = mkGame();
+  g.addPlayer('p1', 'Shadowed', 'gunslinger');
+  g.addPlayer('p2', 'Exposed', 'sentinel');
+  moveTo(g, 'p1', [0, 0, 1]); moveTo(g, 'p2', [0, 0, 1]);
+  advance(g, ENC.readyTime + 0.5);
+  assert.equal(g.enc.st, 'MECH');
+  god(g);
+  Object.assign(g.enc, {
+    nextWaveAt: g.t + 999, nextKeeperAt: g.t + 999, nextVolleyAt: g.t + 999,
+    nextSeekerAt: g.t + 999, nextSlamAt: g.t + 999, nextSpecialAt: g.t + 999,
+  });
+  g.clearAdds();
+
+  // p1 hides in the shadow of the 30° pillar (r 17); p2 stands on the empty
+  // 60° radial (the spawn radial — no stone between center and player there)
+  const a1 = Math.PI / 6, a2 = Math.PI / 3;
+  moveTo(g, 'p1', [Math.cos(a1) * 25, 0, Math.sin(a1) * 25]);
+  moveTo(g, 'p2', [Math.cos(a2) * 25, 0, Math.sin(a2) * 25]);
+  const p1 = g.players.get('p1'), p2 = g.players.get('p2');
+
+  // a live beam parked on p1's radial: the pillar soaks it
+  g.enc.sweep = { a1, a2: a1 + Math.PI / 2, w1: 0, w2: 0, armAt: g.t, until: g.t + 999 };
+  advance(g, 0.3);
+  assert.equal(p1.hp, 1e9, 'a standing pillar shadows the sweep');
+
+  // swing the beam onto p2's open radial: it bites
+  g.enc.sweep.a1 = a2;
+  advance(g, 0.3);
+  assert.equal(1e9 - p2.hp, ENC.sweepDmg, 'no pillar between center and player — the sweep lands');
+
+  // crumbled pillars shelter nobody: the same shadow position now burns
+  g.enc.pillarsDown = true;
+  g.enc.sweep.a1 = a1;
+  p1.sweepCdAt = 0;
+  advance(g, 0.3);
+  assert.equal(1e9 - p1.hp, ENC.sweepDmg, 'pillarsDown voids the shadow');
+
+  // wiring: enterFinal drops the pillars, the snapshot ships the flag for the
+  // client sink, and resetWorld raises them again for the next raid
+  g.enc.pillarsDown = false;
+  g.enterFinal();
+  assert.equal(g.enc.pillarsDown, true, 'enterFinal crumbles the pillars');
+  g.broadcastSnapshot();
+  assert.equal(msgs.findLast(x => x.m.t === 'snap').m.enc.pd, true, 'snapshot carries pd');
+  g.resetWorld();
+  assert.equal(g.enc.pillarsDown, false, 'resetWorld restores the pillars');
+  ok('sweep pillar cover: shadows shelter until the FINAL crumble');
+}
+
 console.log('\nAll encounter tests passed.');

@@ -128,7 +128,13 @@ pillar owners, `s` pillar segments, `g` 9-bit lattice mask, `m` matched flags, `
 resting sky-ring angle). `enc.sweep`
 carries `a1/a2/w1/w2/on` — the constant angular velocities let the client extrapolate the beam
 angles per frame from the server-time base (`encAt = snap.now`), so the beams glide instead of
-stepping at 10 Hz. Keeper enemies
+stepping at 10 Hz. Standing pillars are hard sweep cover: `tickSweep` skips players shadowed by
+`losBlocked` from the arena center, and the client renders each beam line as two center-anchored
+rays whose `scale.x` clips at the first standing pillar (`rayClip` in enemies.js) so the shelter
+reads. `enc.pd` (pillarsDown, set by `enterFinal`, cleared by `resetWorld`) crumbles them:
+`losBlocked` goes inert (sweep cover AND sniper LOS), `world.update` sinks the pillar meshes
+(staggered, raycast noop'd while down — raycasts ignore visibility — and `collidePlayer`'s
+pillar pass gated off), all restored declaratively when `pd` drops at reset. Keeper enemies
 carry `cl` (pedestal-color index) and `sh` (warded); the herald adds `shp/smh` (ward HP/max —
 the client keeper bar shows the ward in ward-color while it holds); ground keepers (SNIPERS —
 see `ENEMIES.keeper.snipe`) add `aim` (tracked prey id — the client beam follows that player's
@@ -201,7 +207,10 @@ a burst blister flings an auric key (`keys`); the key-holder wakes a refuge well
 pedestal (DAMAGE/OBLIT only). Wells do NOT auto-spawn at OBLIT: only key-woken wells shelter the
 otherwise-lethal blast (`oblitDmg`), and `fireOblit` burns every woken well into `enc.burned`
 permanently. FINAL opens with the **generator surge** (`enc.surgeUntil`): the shield reignites
-(boss immune via `applyBossDamage`'s existing `e.shield` gate), one sweep spins for the whole
+(boss immune via `applyBossDamage`'s existing `e.shield` gate), the pillars crumble
+(`e.pillarsDown` — the sweep cover players learned through the rounds is gone, leaving the jump
+as the only dodge; the `sweep` event's client announce hints cover only while `pd` is unset),
+one sweep spins for the whole
 surge (`sweep.until = surgeUntil`) and a seeker burst launches every `surgeWaveCd` — each burst
 is `max(1, floor(alive/2))` waves rippling `surgeWaveGap` apart (`surgeWavesLeft/surgeWaveAt`,
 cleared by `clearPhaseFx` and surge expiry), targets dealt round-robin so every guardian is

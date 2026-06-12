@@ -57,6 +57,7 @@ export class Game {
       bossYaw: 0,                 // server-owned facing; blisters ride the back side
       nextCapsuleAt: 0,
       sweep: null,                // { a1, a2, w1, w2, armAt, until }
+      pillarsDown: false,         // FINAL crumbles the pillars: no sweep cover, no sniper LOS
       barrageUntil: 0, barrageNextAt: 0, barrageAngle: 0, barrageHaste: 1,
       barrageDir: 1, barrageBeatN: 0,
       nextSpecialAt: 0, specialFlip: false,
@@ -635,6 +636,10 @@ export class Game {
     // final stand (their timers sit past surgeUntil), and the annihilation
     // clock only starts once the generator gives out (tickBoss drops the shield)
     e.shield = true;
+    // the pillars crumble for the final stand: the sweep cover players learned
+    // through the rounds is gone, leaving the jump as the only dodge (the
+    // client sinks them off the snapshot `pd` flag; restored by resetWorld)
+    e.pillarsDown = true;
     e.surgeUntil = this.t + ENC.surgeDur;
     e.ends = e.surgeUntil + ENC.annihilation;
     const haste = this.specialHaste();
@@ -1001,6 +1006,7 @@ export class Game {
   // breaks a sniper shot. The arena center is deliberately NOT a blocker:
   // the boss hovers, the plate below is open ground.
   losBlocked(a, b) {
+    if (this.enc.pillarsDown) return false; // FINAL crumbled the cover
     const dx = b[0] - a[0], dz = b[2] - a[2];
     const l2 = dx * dx + dz * dz || 1;
     for (const pil of ARENA.pillars) {
@@ -1127,7 +1133,10 @@ export class Game {
   }
 
   // Two full-diameter beams rotating in opposite directions at shin height.
-  // Returns true while active; players dodge by jumping (y >= sweepMaxY).
+  // Returns true while active; players dodge by jumping (y >= sweepMaxY) or
+  // by standing in a pillar's shadow (losBlocked from the arena center — the
+  // beams radiate from under the boss). FINAL crumbles the pillars
+  // (enc.pillarsDown), so the surge sweep leaves the jump as the only out.
   tickSweep(dt) {
     const sw = this.enc.sweep;
     if (!sw) return false;
@@ -1136,6 +1145,8 @@ export class Game {
     if (this.t >= sw.armAt) {
       for (const p of this.alivePlayers()) {
         if (p.pos[1] >= ENC.sweepMaxY || this.t < (p.sweepCdAt || 0)) continue;
+        // beam height, both ends — losBlocked's height check stays under pil.h
+        if (this.losBlocked([0, 0.9, 0], [p.pos[0], 0.9, p.pos[2]])) continue;
         const r = Math.hypot(p.pos[0], p.pos[2]);
         const th = Math.atan2(p.pos[2], p.pos[0]);
         for (const a of [sw.a1, sw.a2]) {
@@ -1614,6 +1625,7 @@ export class Game {
         sg: e.surgeUntil, // generator-surge end: the HUD shield panel drains toward it
         burned: e.burned, focus: e.focus, bossYaw: Math.round(e.bossYaw * 100) / 100,
         wh: e.wormhole, mAt: e.missileAt,
+        pd: e.pillarsDown, // clients sink the pillars + drop their collision/cover
         // sigil layout: twin/final colors, per-pillar owner + segment, lattice
         // state, and which codes have been answered
         // ga: the panel's resting sky-ring angle — late/lossy clients re-home

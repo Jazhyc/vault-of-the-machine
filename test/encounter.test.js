@@ -578,6 +578,32 @@ const slay = (g, id) => { while (g.enemies.has(id)) g.onMessage('p1', { t: 'hit'
   ok('anti-cheat caps & nova gating');
 }
 
+// ---------- adaptive wave cadence: a wiped arena refills fast, a crowded one breathes ----------
+{
+  const g = mkGame();
+  g.addPlayer('p1', 'Reaper', 'voidcaller');
+  moveTo(g, 'p1', [0, 0, 1]);
+  advance(g, ENC.readyTime + 0.5); // MECH; first wave due ~3 s in
+  advance(g, 4);
+  const smalls = () => [...g.enemies.values()].filter(e => !['keeper', 'blister', 'seeker'].includes(e.type));
+  assert.ok(smalls().length > 0, 'a wave is up');
+  // a populated arena keeps a long breath between waves
+  assert.ok(g.enc.nextWaveAt - g.t > ENC.waveCdEmpty + 1, 'populated arena waits the long cycle');
+  // nova-style wipe: the due time tightens to the empty cadence...
+  for (const e of smalls()) g.killEnemy(e, null);
+  advance(g, 0.1);
+  assert.ok(g.enc.nextWaveAt - g.t < ENC.waveCdEmpty + 0.1, 'emptied arena tightens the wave timer');
+  // ...and the replacement wave actually arrives on the short clock
+  advance(g, ENC.waveCdEmpty + 0.2);
+  assert.ok(smalls().length > 0, 'replacement wave arrives fast');
+  // parked timers stay parked: the tighten clause must not wake a hushed arena
+  for (const e of smalls()) g.killEnemy(e, null);
+  g.enc.nextWaveAt = g.t + 999;
+  advance(g, ENC.waveCd + 2);
+  assert.equal(smalls().length, 0, 'a parked wave timer is never tightened');
+  ok('adaptive wave cadence: wipe → fast refill, crowd → slow breath, parked stays parked');
+}
+
 // ---------- refuge wells stay dormant without a key; the blast erases the unsheltered ----------
 {
   const g = mkGame();

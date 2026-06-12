@@ -204,7 +204,11 @@ server splash check uses the blister's real height. `clearAdds` deliberately pre
 burst ones never regrow.
 
 Fireteam is 1–6 (`MAX_PLAYERS`); boss HP (rolled at encounter start), keeper HP, wave sizes, and
-the live-add ceiling all scale per player (knobs in `ENC`). Enemy bolts and boss volleys lead
+the live-add ceiling all scale per player (knobs in `ENC`). MECH wave cadence is adaptive: each
+tick the due time tightens (`Math.min`, never delays) toward `waveCdEmpty→waveCd` lerped by the
+live-add fill (`addFill` in game.js), so an AoE wipe refills the arena in seconds while a near-cap
+arena keeps the slow breath; the tighten clause skips timers parked past `t + waveCd` (the tests'
+t+999 hush). Enemy bolts and boss volleys lead
 the target: `fireProjAt`/`leadAim` aim ahead along `p.vel` (estimated from `state` messages,
 teleports discarded), capped at `ENC.leadMax` seconds. Acolyte bolts corkscrew
 (`ENEMIES.acolyte.helix`): a sin-tapered helix around the straight lead-aim line — zero radius at

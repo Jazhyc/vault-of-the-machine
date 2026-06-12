@@ -308,6 +308,20 @@ addEventListener('keydown', (e) => {
     e.preventDefault(); // keep focus off browser chrome / hidden UI buttons
     showLoadoutScreen(false);
   }
+  // Fullscreen toggle — preventDefault takes over the browser's native F11 so
+  // the element-fullscreen path runs instead (and the action stays rebindable).
+  // Chrome can drop pointer lock across a fullscreen transition, which would
+  // dump the player onto the pause overlay mid-fight — re-request it after the
+  // flip while the keypress's transient activation still allows it.
+  if (e.code === code('fullscreen') && !e.repeat) {
+    e.preventDefault();
+    const relock = !!document.pointerLockElement;
+    const flip = document.fullscreenElement
+      ? document.exitFullscreen()
+      : document.documentElement.requestFullscreen();
+    flip.then(() => { if (relock && !document.pointerLockElement) renderer.domElement.requestPointerLock(); })
+      .catch(() => {}); // denied (no gesture / iframe policy) — stay windowed
+  }
 });
 
 // ---------- settings panel (pause overlay) ----------
@@ -385,14 +399,15 @@ function renderBindHints() {
     `${b('LMB')} fire<br>${b('RMB')} ADS<br>` +
     `${b(`${L('weapon1')}/${L('weapon2')}/${L('weapon3')}`)} weapons<br>${b(L('reload'))} reload<br>` +
     `${b(L('grenade'))} grenade<br>${b(L('melee'))} melee<br>${b(L('super'))} super<br>` +
-    `${b(L('interact'))} interact / revive<br>${b(L('inventory'))} inventory (lobby)`;
+    `${b(L('interact'))} interact / revive<br>${b(L('inventory'))} inventory (lobby)<br>` +
+    `${b(L('fullscreen'))} fullscreen`;
   document.querySelector('.controlsHint').innerHTML =
     `${b(moveStr)} move &nbsp; ${b(L('jump'))} jump (×2) &nbsp; ${b(L('sprint'))} sprint &nbsp; ` +
     `${b('MOUSE')} aim / fire &nbsp; ${b('RMB')} aim-down-sights<br>` +
     `${b(`${L('weapon1')} / ${L('weapon2')} / ${L('weapon3')}`)} or ${b('WHEEL')} swap weapons &nbsp; ` +
     `${b(L('reload'))} reload &nbsp; ${b(L('grenade'))} grenade &nbsp; ${b(L('melee'))} melee &nbsp; ` +
     `${b(L('super'))} super &nbsp; ${b(L('interact'))} interact / revive &nbsp; ` +
-    `${b(L('inventory'))} inventory &nbsp; ${b(L('help'))} help`;
+    `${b(L('inventory'))} inventory &nbsp; ${b(L('help'))} help &nbsp; ${b(L('fullscreen'))} fullscreen`;
 }
 renderBindHints();
 addEventListener('sv-settings', () => { renderBindRows(); renderSens(); renderBindHints(); });
@@ -598,13 +613,15 @@ net.on('barrage', () => {
 });
 net.on('bossWake', () => {
   audio.roar(); hud.announce('VAULTHUR AWAKENS', 'WATCHER OF THE DEEP');
-  // its rising hurls the fireteam off the plate — harmless, client-computed
-  // off our live position like bossSlam, but a sustained shockwave wind
-  if (player && player.alive) {
-    player.blast(ENC.bossPos, ENC.wakeShove);
-    effects.shake(1.0);
-  }
+  enemies.wake(); // the dormant hull drops out of its hover (ENC.wakeDrop)
 });
+// touchdown of the wake descent: the slam hurls the fireteam off the plate —
+// harmless, client-computed off our live position like bossSlam, but a
+// sustained shockwave wind
+enemies.onBossSlam = () => {
+  effects.shake(1.0); audio.slam();
+  if (player && player.alive) player.blast(ENC.bossPos, ENC.wakeShove);
+};
 net.on('bossFocus', (m) => {
   audio.roar();
   if (m.id === net.myId) hud.announce('VAULTHUR MARKS YOU', 'ITS GAZE FINDS YOU');

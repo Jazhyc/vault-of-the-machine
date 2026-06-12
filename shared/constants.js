@@ -213,6 +213,10 @@ export const ENC = {
   // plus a sustained outward wind — acc m/s² for dur s lands a plate-stander
   // around the spawn ring.
   wakeShove: { acc: 130, lift: 12, dur: 1.2 },
+  // dormant hover: the hull hangs `drop` m above bossPos all lobby, then falls
+  // for `dur` s on bossWake (ease-in, client-cosmetic — the server's boss never
+  // moves) and lands exactly as the wakeShove wind fires, selling the slam.
+  wakeDrop: { drop: 30, dur: 1.1 },
   // seekers: homing missiles off the boss's back, active from round 1.
   // Perfect tracking is the threat; the counters are shooting them down (a
   // couple of body shots), feeding them a pillar/wall, or sprinting away —

@@ -345,6 +345,7 @@ export class EnemyManager {
     this.views = new Map();   // id -> view
     this.t = 0;
     this.bossDeathT = -1;
+    this.bossWakeT = -1;      // descent start; -1 = not falling (see wake())
     this.buildBoss();
   }
 
@@ -405,6 +406,11 @@ export class EnemyManager {
     });
     this.beamMat = beamMat;
   }
+
+  // bossWake: the dormant hull drops out of the hover (position is cosmetic to
+  // the server). onBossSlam fires once at touchdown — main.js hangs the wake
+  // shockwave + shake there so the shove lands with the impact, not the roar.
+  wake() { this.bossWakeT = this.t; }
 
   sync(snap, now) {
     const seen = new Set();
@@ -596,13 +602,36 @@ export class EnemyManager {
       return;
     }
     this.bossDeathT = -1;
-    b.g.visible = enc.st !== 'LOBBY';
-    if (!b.g.visible) {
-      b.g.scale.setScalar(1); b.g.rotation.z = 0; b.g.position.y = ENC.bossPos[1];
+    b.g.visible = true;
+    const drop = ENC.wakeDrop;
+    // dormant all lobby: hangs high over the center plate, lightless, dark
+    // core, rings barely turning. The bossWakeT guard keeps a started fall
+    // alive through the ~100 ms where snapshots still say LOBBY after the
+    // wake event arrives.
+    if (enc.st === 'LOBBY' && this.bossWakeT < 0) {
+      b.g.scale.setScalar(1); b.g.rotation.z = 0;
+      b.g.position.y = ENC.bossPos[1] + drop.drop + Math.sin(this.t * 0.5) * 0.9;
+      b.light.position.y = b.g.position.y;
       b.light.intensity = 0;
+      b.ring1.rotation.x += dt * 0.06; b.ring1.rotation.y += dt * 0.035;
+      b.ring2.rotation.y -= dt * 0.05; b.lattice.rotation.y -= dt * 0.02;
+      b.shield.visible = false;
+      b.body.material.emissive.set(0x33114f);
+      b.body.material.emissiveIntensity = 0.2;
+      b.core.material.color.set(0x2a1508);
+      b.core.scale.setScalar(0.7);
       return;
     }
-    b.g.position.y = ENC.bossPos[1] + Math.sin(this.t * 0.8) * 0.7;
+    if (this.bossWakeT >= 0) {
+      // wake descent: ease-in so it gathers speed and slams home; touchdown
+      // hands main.js the impact moment (shockwave wind + shake live there)
+      const k = Math.min(1, (this.t - this.bossWakeT) / drop.dur);
+      b.g.position.y = ENC.bossPos[1] + drop.drop * (1 - k * k);
+      if (k >= 1) { this.bossWakeT = -1; this.onBossSlam?.(); }
+    } else {
+      b.g.position.y = ENC.bossPos[1] + Math.sin(this.t * 0.8) * 0.7;
+    }
+    b.light.position.y = b.g.position.y;
     b.ring1.rotation.x += dt * 0.4; b.ring1.rotation.y += dt * 0.23;
     b.ring2.rotation.y -= dt * 0.31; b.ring2.rotation.z += dt * 0.17;
     b.lattice.rotation.y -= dt * 0.12; b.lattice.rotation.x += dt * 0.07;

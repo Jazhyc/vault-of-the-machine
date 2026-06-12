@@ -56,10 +56,14 @@ Knockback is client-computed where an FX broadcast allows it: the `bossSlam`/`se
 handlers in main.js shove the local player from their own live position (the server's view is an
 RTT stale) using the shared `kb` tuning (`ENC.slamKb`, `ENEMIES.*.kb`); the `hurt` message's
 `imp` is applied as an impulse only for sources without such an event (husk melee) and otherwise
-only aims the hurt-pan. `bossWake` adds a harmless cinematic shockwave (`player.blast`, tuned by
-`ENC.wakeShove`): a lift plus a sustained outward wind, because the air blend bleeds velocity too
-fast for any one-shot impulse to carry a player from the plate to the arena edge (it bypasses the
-impulse budget — it's scripted, not a clumped hurt). Two client-side burst clamps tame TCP clumping at high ping (several
+only aims the hurt-pan. The boss hovers visibly dormant all LOBBY (`ENC.wakeDrop.drop` m above
+`bossPos` — client-cosmetic, the server's boss never moves; boss bar hidden, `applyBossDamage`
+LOBBY-gated, lobby shots read IMMUNE off `enc.shield`); `bossWake` starts a `wakeDrop.dur` s
+ease-in descent (`EnemyManager.wake`), and touchdown (`enemies.onBossSlam` in main.js) fires the
+harmless cinematic shockwave (`player.blast`, tuned by `ENC.wakeShove`): a lift plus a sustained
+outward wind, because the air blend bleeds velocity too fast for any one-shot impulse to carry a
+player from the plate to the arena edge (it bypasses the impulse budget — it's scripted, not a
+clumped hurt). Two client-side burst clamps tame TCP clumping at high ping (several
 messages landing in one frame): `player.impulse` budgets the per-frame summed shove
 (`PLAYER.kbFrameCap`) and `effects.shake` budgets per-frame growth.
 

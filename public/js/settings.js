@@ -14,7 +14,7 @@ const DEFAULT_BINDS = {
   jump: 'Space', sprint: 'ShiftLeft',
   weapon1: 'Digit1', weapon2: 'Digit2', weapon3: 'Digit3',
   reload: 'KeyR', grenade: 'KeyG', melee: 'KeyV', super: 'KeyF',
-  interact: 'KeyE', inventory: 'Tab', help: 'KeyH',
+  interact: 'KeyE', inventory: 'Tab', help: 'KeyH', fullscreen: 'F11',
 };
 
 // Display order + labels for the rebind UI.
@@ -25,7 +25,7 @@ export const ACTIONS = [
   ['weapon1', 'WEAPON 1'], ['weapon2', 'WEAPON 2'], ['weapon3', 'WEAPON 3'],
   ['reload', 'RELOAD'], ['grenade', 'GRENADE'], ['melee', 'MELEE'],
   ['super', 'SUPER'], ['interact', 'INTERACT'], ['inventory', 'INVENTORY'],
-  ['help', 'CONTROLS OVERLAY'],
+  ['help', 'CONTROLS OVERLAY'], ['fullscreen', 'FULLSCREEN'],
 ];
 
 // ESC cancels a rebind capture (and the browser eats it under pointer lock

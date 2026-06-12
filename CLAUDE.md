@@ -360,6 +360,12 @@ Standing rules derived from the above:
   render only while `stage === 'KEEPERS'` and that color is unmatched; otherwise the holograms
   drift through random ghost segments (one canvas repaint per 0.14 s, round-robin — never a
   same-frame burst).
+- **Enemy spawn-in is purely client-side**, driven by the view's `bornAt` in `EnemyManager.update`:
+  adds squeeze out of the gate portal (height-leads-girth scale-in), ground keepers slam down from
+  the sky (`KEEPER_DROP`, exported) under a pedestal-colored `superFlare` whose ring bursts at the
+  touchdown (`onSpawn`/`onKeeperLand` hooks in main.js). Seekers, blisters (own swell), and the
+  sky herald (heraldRise) skip it. The flare pool is sized 6 because keeper drops share it with
+  super casts.
 - The camera roll must stay zeroed (`player.js` sets rotation with explicit `z = 0`); the lobby
   showcase/orbit cameras leave roll behind otherwise (the warmup block restores it explicitly).
 - Adaptive resolution (`perfTick` in `main.js`) owns `renderer.setPixelRatio` — don't set it elsewhere.

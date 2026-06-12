@@ -3,7 +3,7 @@ import { CLASSES, ARENA, PLAYER, ENC, ENEMIES, SUPER, WEAPONS, LOADOUT, MAX_PLAY
 import { Net } from './net.js';
 import { GameAudio } from './audio.js';
 import { buildWorld } from './world.js';
-import { EnemyManager, buildEnemyWarmup } from './enemies.js';
+import { EnemyManager, buildEnemyWarmup, KEEPER_DROP } from './enemies.js';
 import { EntityManager, buildGuardian, buildEntityWarmup } from './entities.js';
 import { Effects } from './effects.js';
 import { LocalPlayer } from './player.js';
@@ -432,9 +432,19 @@ const volAt = (p) => player
   : 1;
 const capsTracked = new Map(); // capsule id -> { land, landed, p }
 let lastSpawnSfx = 0, lastDieSfx = 0, lastChargeSfx = 0, stepIn = 0.1, prevGrounded = true, prevVy = 0, heartbeatIn = 0, lastTickSec = -1;
-enemies.onSpawn = () => { // one portal blip per spawn burst, not one per add
+enemies.onSpawn = (ty, p, cl, sky) => { // one portal blip per spawn burst, not one per add
   const n = performance.now();
   if (n - lastSpawnSfx > 350) { lastSpawnSfx = n; audio.spawnBlip(); }
+  // ground keepers arrive in a pillar of their pedestal color; the flare's
+  // ring burst is timed to the touchdown of the descent in enemies.js
+  if (ty === 'keeper' && !sky && p) {
+    effects.superFlare(new THREE.Vector3(p[0], 0, p[2]),
+      ARENA.pedestals[cl ?? 0].color, KEEPER_DROP.dur + 0.5, KEEPER_DROP.dur);
+  }
+};
+enemies.onKeeperLand = (pos) => { // descent touchdown (enemies.js update)
+  effects.shake(0.3);
+  audio.slam(0.6 * volAt([pos.x, pos.y, pos.z]));
 };
 // keeper sniper beam endpoints: the local player's beam tracks your LIVE
 // position (the server's view is an RTT stale); remotes use their interp views

@@ -7,6 +7,13 @@ const _Z = new THREE.Vector3(0, 0, 1);
 const _Y = new THREE.Vector3(0, 1, 0);
 const _dir = new THREE.Vector3();
 
+// spawn-in animation tuning (purely cosmetic — the server's enemy is live
+// from its first tick). Adds squeeze through the gate portal; ground keepers
+// slam down from the sky. KEEPER_DROP is exported so main.js can time the
+// pedestal-colored superFlare's ring burst to the touchdown.
+export const KEEPER_DROP = { h: 14, dur: 1.0 };
+const ADD_GROW = 0.55; // husk/acolyte/wisp materialize window (s)
+
 // stretch a unit-cylinder mesh between two points (keeper sniper beams)
 function spanBeam(mesh, ax, ay, az, bx, by, bz, r) {
   _dir.set(bx - ax, by - ay, bz - az);
@@ -505,7 +512,7 @@ export class EnemyManager {
         this.targets.push(group);
         v = { group, interp: new Interp(), hpBar, shield, ty: e.ty, sky, bornAt: this.t };
         this.views.set(e.id, v);
-        if (this.onSpawn && e.ty !== 'blister') this.onSpawn(e.ty); // sfx hook
+        if (this.onSpawn && e.ty !== 'blister') this.onSpawn(e.ty, e.p, e.cl, sky); // sfx/spawn-FX hook
       }
       v.sh = !!e.sh; // warded keepers — weapons read this for IMMUNE feedback
       v.shp = e.shp; // herald only: the ward's own (breakable) health
@@ -627,6 +634,26 @@ export class EnemyManager {
         // height (~4) to keep the dangling head where the feet stood — clear of
         // the boss hull below (top ≈ y17.5) — and bob slowly to sell the hang
         v.group.position.y += 4 + Math.sin(this.t * 1.1) * 0.3;
+      }
+      // spawn-in: adds squeeze out of the gate portal — a tall thin sliver
+      // filling out — while ground keepers slam down from the sky (their
+      // pedestal-color flare and touchdown slam live in main.js, fed by the
+      // onSpawn / onKeeperLand hooks). Seekers launch at speed and the sky
+      // herald has its own heraldRise; both skip this.
+      if (!v.grown && v.ty !== 'seeker' && !v.sky) {
+        const age = this.t - v.bornAt;
+        if (v.ty === 'keeper') {
+          const k = Math.min(1, age / KEEPER_DROP.dur);
+          v.group.position.y += KEEPER_DROP.h * (1 - k * k); // gathers speed, slams home
+          v.group.scale.setScalar(Math.max(0.01, Math.min(1, k * 3)));
+          if (k >= 1) { v.grown = true; this.onKeeperLand?.(v.group.position); }
+        } else {
+          const k = Math.min(1, age / ADD_GROW);
+          const fill = k * k * (3 - 2 * k);
+          // height leads, girth lags — reads as extruded through the portal film
+          v.group.scale.set(Math.max(0.02, fill * fill), Math.max(0.02, Math.sqrt(k)), Math.max(0.02, fill * fill));
+          if (k >= 1) { v.group.scale.setScalar(1); v.grown = true; }
+        }
       }
       if (v.ty === 'seeker') {
         // a 3D flier: aim the dart along its snapshot-to-snapshot flight path

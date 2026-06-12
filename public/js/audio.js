@@ -107,7 +107,7 @@ export class GameAudio {
     else { this.tone(180, 0.35, 0.9, 'sine', 320); this.noise(0.25, 0.7, 1200, 1, 'highpass'); }
   }
   roar() { this.tone(48, 0.55, 1.4, 'sawtooth', 38); this.noise(0.4, 1.2, 250); }
-  slam() { this.tone(42, 0.6, 0.7, 'sine', 22); this.noise(0.45, 0.5, 200); }
+  slam(vol = 1) { this.tone(42, 0.6 * vol, 0.7, 'sine', 22); this.noise(0.45 * vol, 0.5, 200); }
   // Damage taken: the timbre says what hit you, the weight says how hard, and
   // the stereo pan (when the hit carries a knockback direction) says from where.
   hurt(dmg = 10, src = '', pan = 0) {

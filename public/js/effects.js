@@ -79,12 +79,13 @@ export class Effects {
 
     // Super-cast flourish flares: a class-colored light pillar that breathes in
     // through the windup and bursts into a racing ground ring at the apex.
-    // Pool of 4 (simultaneous casts inside one 1.6 s window are rare even at 6
-    // players); materials cloned per slot — color and opacity animate per
-    // instance. No lights — the standing light-count rule applies.
+    // Also reused (pedestal-colored) for keeper spawn descents, which arrive
+    // two at a time — pool of 6 so a twin-keeper drop can't steal a live
+    // super flourish; materials cloned per slot — color and opacity animate
+    // per instance. No lights — the standing light-count rule applies.
     const flareGeo = new THREE.CylinderGeometry(0.55, 0.85, 26, 12, 1, true);
     const flareRingGeo = new THREE.RingGeometry(0.9, 1.1, 40).rotateX(-Math.PI / 2);
-    this.flares = Array.from({ length: 4 }, () => {
+    this.flares = Array.from({ length: 6 }, () => {
       const mat = () => new THREE.MeshBasicMaterial({
         color: 0xffffff, transparent: true, opacity: 0, depthWrite: false,
         blending: THREE.AdditiveBlending, side: THREE.DoubleSide,

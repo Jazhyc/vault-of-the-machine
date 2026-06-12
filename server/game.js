@@ -82,7 +82,7 @@ export class Game {
     const p = {
       id, name: String(name).slice(0, 16) || 'Guardian', cls,
       pos: [...ARENA.spawn], yaw: ARENA.spawnYaw, pitch: 0,
-      hp: PLAYER.maxHp, lastDmg: -99, downed: false, dead: false, bleedAt: 0,
+      hp: PLAYER.maxHp, lastDmg: -99, downed: false, dead: false,
       sup: 0, goldenUntil: 0, pendingNova: false, castUntil: 0,
       antiviral: 0, hasKey: false, wardUntil: 0,
       vel: [0, 0, 0], lastStateAt: -1,
@@ -311,7 +311,7 @@ export class Game {
   }
 
   downPlayer(p) {
-    p.hp = 0; p.downed = true; p.bleedAt = this.t + PLAYER.bleedout;
+    p.hp = 0; p.downed = true;
     p.revive = null;
     this.send(null, { t: 'down', id: p.id });
     this.toast(`${p.name} is down!`, 'warn');
@@ -1417,10 +1417,8 @@ export class Game {
     const e = this.enc;
     for (const p of this.players.values()) {
       if (p.dead) continue;
-      if (p.downed) {
-        if (this.t >= p.bleedAt) { p.downed = false; p.dead = true; this.toast(`${p.name} has died`, 'warn'); this.checkWipe(); }
-        continue;
-      }
+      // downed guardians never bleed out — a revive stays possible until the wipe
+      if (p.downed) continue;
       // regen
       if (this.t - p.lastDmg > PLAYER.regenDelay && p.hp < PLAYER.maxHp) {
         p.hp = Math.min(PLAYER.maxHp, p.hp + PLAYER.regenRate * dt);
@@ -1438,7 +1436,7 @@ export class Game {
         const q = this.players.get(p.revive.target);
         if (!q || !q.downed || dxz(p.pos, q.pos) > PLAYER.reviveRange + 1) p.revive = null;
         else if (this.t >= p.revive.end) {
-          q.downed = false; q.hp = 80; q.lastDmg = this.t; q.bleedAt = 0;
+          q.downed = false; q.hp = 80; q.lastDmg = this.t;
           this.send(null, { t: 'revived', id: q.id, by: p.name });
           this.toast(`${p.name} revived ${q.name}`, 'good');
           p.revive = null;
@@ -1627,7 +1625,7 @@ export class Game {
         hp: Math.round(p.hp), sup: Math.round(p.sup * 10) / 10,
         dn: p.downed, dd: p.dead, gu: p.goldenUntil,
         av: p.antiviral, ky: p.hasKey, wb: p.wardUntil,
-        bleedAt: p.bleedAt, rv: p.revive ? p.revive.end : 0, rt: p.revive ? p.revive.target : null,
+        rv: p.revive ? p.revive.end : 0, rt: p.revive ? p.revive.target : null,
       })),
       enemies: [...this.enemies.values()].map(en => ({
         id: en.id, ty: en.type, p: en.pos.map(v => Math.round(v * 100) / 100),

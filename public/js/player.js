@@ -72,7 +72,6 @@ export class LocalPlayer {
     this.downed = p.dn; this.dead = p.dd;
     this.goldenUntil = p.gu; this.serverNow = serverNow;
     this.wardUntil = p.wb;
-    this.bleedAt = p.bleedAt;
     if (wasAlive && !this.alive) this.vel.set(0, 0, 0);
   }
 

@@ -232,6 +232,14 @@ function showLoadoutScreen(afterVictory) {
 // ---------- game state ----------
 let player = null, weapons = null, entities = null;
 let snap = null, serverOffset = 0, prevSt = 'LOBBY', prevSup = 0, joined = false;
+// De-jittered server-clock estimate for world rendering. Per-snapshot offsets
+// swing by the full TCP clump spread at high ping; steering interpolation
+// with them warps the timebase (the old "aim snaps back" bug). `off` anchors
+// to the fastest arrival seen (slow downward drift re-adapts to real latency
+// changes), `jit` tracks the observed clump spread, `delay` eases toward
+// 0.13 s + jit so the delay itself never steps the world, and `rt` is the
+// elastic playout clock (see the render loop).
+const netClock = { off: null, jit: 0, delay: 0.13, rt: null };
 let bannerRallied = false; // this lobby's banner already restocked me
 let prevHp = PLAYER.maxHp, lowHpCueAt = 0;
 const remoteProjs = [];
@@ -470,6 +478,9 @@ net.on('welcome', (m) => { if (m.gj) unlocks.gjally = true; }); // this name own
 net.on('snap', (m) => {
   snap = m;
   serverOffset = m.now - performance.now() / 1000;
+  if (netClock.off === null) netClock.off = serverOffset;
+  netClock.off = Math.max(serverOffset, netClock.off - 0.002);   // fastest-path anchor
+  netClock.jit = Math.max(netClock.off - serverOffset, netClock.jit - 0.004);
   const now = performance.now() / 1000;
   enemies.sync(m, now);
   if (entities) { entities.sync(m, now); entities.setServerNow(m.now); }
@@ -868,11 +879,25 @@ function loop() {
   net.handlerMs = 0;
 
   perfTick(dt, now);
-  const renderTime = now - 0.13; // interpolation delay
+  // Render clock for snapshot-driven entities, in SERVER seconds (Interp
+  // samples are stamped with snap.now). The delay covers one 10 Hz snapshot
+  // interval plus the observed clump spread; sNow (no delay) feeds the
+  // deterministic projectile paths. Pre-first-snapshot values are inert —
+  // nothing has interp samples yet.
+  netClock.delay += (Math.min(0.5, 0.13 + netClock.jit) - netClock.delay) * Math.min(1, dt * 0.7);
+  const sNow = netClock.off === null ? 0 : now + netClock.off;
+  // Elastic playout: a TCP loss-stall freezes delivery for ≥1 RTT, and a clock
+  // that steps straight to `target` afterwards teleports the world across the
+  // gap. Slew at ≤±15% speed instead — the backlog plays out as a brief glide.
+  // A >1 s desync (tab parked in background) snaps rather than slow-mos forever.
+  const target = sNow - netClock.delay;
+  if (netClock.rt === null || Math.abs(target - netClock.rt) > 1) netClock.rt = target;
+  else netClock.rt += dt * (1 + Math.max(-0.15, Math.min(0.15, target - netClock.rt)));
+  const renderTime = netClock.rt;
   let stageT = performance.now();
   const mark = (key) => { const n2 = performance.now(); stageMs[key] = n2 - stageT; stageT = n2; };
 
-  world.update(dt, getEnc(), serverNow());
+  world.update(dt, getEnc(), netClock.off === null ? null : sNow); // de-jittered clock for the grab-arc replay
   mark('world');
   enemies.update(dt, renderTime, joined ? camera : null);
   mark('enemies');
@@ -903,7 +928,7 @@ function loop() {
       selfBody.g.visible = on;
     }
     weapons.update(dt, now);
-    entities.update(dt, renderTime, now, player.pos);
+    entities.update(dt, renderTime, now, player.pos, sNow);
     const my = me();
     hud.update(dt, snap, my, weapons, serverNow(), net.myId);
     updatePrompt();

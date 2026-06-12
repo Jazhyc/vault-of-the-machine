@@ -528,6 +528,10 @@ const slay = (g, id) => { while (g.enemies.has(id)) g.onMessage('p1', { t: 'hit'
   assert.ok(p2.downed, 'p2 downed');
   assert.equal(g.enc.st, 'MECH', 'one down of four does not wipe');
 
+  // no bleed-out: a downed guardian stays revivable indefinitely
+  advance(g, 60);
+  assert.ok(p2.downed && !p2.dead, 'downed guardian never bleeds out');
+
   moveTo(g, 'p1', [p2.pos[0] + 1, 0, p2.pos[2]]);
   god(g);
   // spam E the entire time — repeated interacts must NOT restart the channel

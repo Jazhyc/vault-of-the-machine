@@ -27,7 +27,7 @@ export const PLAYER = {
   // shove (slam, |[14,9]| ≈ 16.6) through untouched and trims only pile-ups
   kbFrameCap: 18,
   regenDelay: 5, regenRate: 60,
-  reviveTime: 3.0, reviveRange: 4.5, bleedout: 45,
+  reviveTime: 3.0, reviveRange: 4.5,
   interactRange: 2.6,
 };
 

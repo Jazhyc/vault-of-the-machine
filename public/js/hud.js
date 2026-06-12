@@ -233,13 +233,12 @@ export class Hud {
       // downed overlay
       this.el.downed.classList.toggle('hidden', !me.dn);
       if (me.dn) {
-        const left = Math.max(0, (me.bleedAt || 0) - serverNow);
         const solo = snap.players.length <= 1;
         const reviver = snap.players.find(p => p.rt === myId && p.rv > serverNow);
         this.setText('dtext', this.el.downedText,
           reviver ? `${reviver.name.toUpperCase()} IS REVIVING YOU…`
             : solo ? 'YOUR LIGHT FADES...'
-              : `A TEAMMATE CAN REVIVE YOU — ${fmt(left)}`);
+              : 'A TEAMMATE CAN REVIVE YOU');
       }
 
       // revive channel progress (shown to the reviver and to the downed)

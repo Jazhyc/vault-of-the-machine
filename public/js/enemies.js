@@ -23,19 +23,38 @@ function spanBeam(mesh, ax, ay, az, bx, by, bz, r) {
   mesh.quaternion.setFromUnitVectors(_Y, _dir.normalize());
 }
 
-// Smooth interpolation between the last two snapshots.
+// Smooth interpolation across buffered snapshots. Samples are stamped with
+// SERVER time (snap.now), never arrival time: TCP clumping at high ping
+// shifts arrivals by hundreds of ms, and an arrival-based timebase warps
+// with every clump (fast-forward, overshoot, snap back) — server stamps stay
+// evenly spaced no matter how the wire delivers them. Render time comes from
+// the de-jittered netClock in main.js. Never extrapolate past the newest
+// sample: a brief hold beats predicting motion that then snaps backward.
 export class Interp {
-  constructor() { this.a = null; this.b = null; }
-  push(p, yaw, t) { this.a = this.b; this.b = { p: [...p], yaw, t }; }
+  constructor() { this.buf = []; }
+  // newest / second-newest samples (seeker heading + husk gait read these)
+  get b() { return this.buf.length ? this.buf[this.buf.length - 1] : null; }
+  get a() { return this.buf.length > 1 ? this.buf[this.buf.length - 2] : null; }
+  push(p, yaw, t) {
+    const b = this.b;
+    if (b && t - b.t < 0.001) return; // duplicate server tick (clumped delivery)
+    this.buf.push({ p: [...p], yaw, t });
+    if (this.buf.length > 8) this.buf.shift(); // 0.7 s span covers max delay + slew
+  }
   at(t) {
-    if (!this.b) return null;
-    if (!this.a || this.b.t - this.a.t < 0.001) return this.b;
-    const f = Math.min(1.3, Math.max(0, (t - this.a.t) / (this.b.t - this.a.t)));
-    let dy = this.b.yaw - this.a.yaw;
+    const n = this.buf.length;
+    if (!n) return null;
+    if (t <= this.buf[0].t) return this.buf[0];
+    if (t >= this.buf[n - 1].t) return this.buf[n - 1]; // hold, don't extrapolate
+    let i = n - 1;
+    while (this.buf[i - 1].t > t) i--;
+    const A = this.buf[i - 1], B = this.buf[i];
+    const f = (t - A.t) / (B.t - A.t);
+    let dy = B.yaw - A.yaw;
     if (dy > Math.PI) dy -= Math.PI * 2; if (dy < -Math.PI) dy += Math.PI * 2;
     return {
-      p: [0, 1, 2].map(i => this.a.p[i] + (this.b.p[i] - this.a.p[i]) * f),
-      yaw: this.a.yaw + dy * f,
+      p: [0, 1, 2].map(k => A.p[k] + (B.p[k] - A.p[k]) * f),
+      yaw: A.yaw + dy * f,
     };
   }
 }
@@ -525,7 +544,7 @@ export class EnemyManager {
       if (e.lk && !v.lk && this.onSnipeLock) this.onSnipeLock(e.aim);
       v.aim = e.aim || null;
       v.lk = e.lk || null;
-      v.interp.push(e.p, e.yaw, now);
+      v.interp.push(e.p, e.yaw, snap.now); // server-time stamp (see Interp)
       if (v.hpBar) {
         // while the herald's ward holds, its bar tracks the ward in ward-color
         if (v.sh && e.shp != null && e.smh) this.drawHpBar(v.hpBar, e.shp / e.smh, ARENA.pedestals[e.cl ?? 0].color);
@@ -536,7 +555,10 @@ export class EnemyManager {
       if (!seen.has(id)) this.removeView(id, v);
     }
     this.enc = snap.enc;
-    this.encAt = now; // arrival time — base for sweep-beam angle extrapolation
+    // server-time base for sweep-beam angle extrapolation — renderTime is in
+    // server seconds, so the base must be too (and arrival jitter must not
+    // re-step the beam angles under TCP clumping/loss)
+    this.encAt = snap.now;
   }
 
   // Keeper sniper beam off the snapshot state: TRACK glues it to the prey's

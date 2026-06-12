@@ -97,7 +97,15 @@ broadcast `healBurst {id, p, amt}` on contact.
 `tickProjectiles`/`tickDots` run in every state — mend-orbs must fly even in LOBBY.
 
 Protocol: JSON over one ws connection. Snapshots broadcast at 10 Hz (`broadcastSnapshot`); clients
-interpolate remote entities ~130 ms behind arrival time (`Interp` in `enemies.js`). One-shot events
+interpolate remote entities through `Interp` (`enemies.js`): a small sample buffer stamped with
+SERVER time (`snap.now` — never arrival time: TCP clumps at high ping warp an arrival-based
+timebase into visible backward snaps), rendered behind the de-jittered `netClock` in `main.js`
+(fastest-arrival offset anchor + clump-spread-adaptive delay, 130–500 ms, played out through an
+elastic ≤±15%-slew clock so a TCP loss-stall resolves as a brief glide, not a teleport) and never
+extrapolated past the newest sample. Snapshot projectiles dead-reckon their deterministic paths on
+the same server clock at zero delay (`sNow`, also the grab-arc replay clock — anything compared
+against `renderTime`/`sNow` must be server-stamped, never arrival-stamped; mixing the epochs
+shipped a sweep-beam bug once). One-shot events
 (`pf` fire relay, `explosion`, `super`, `sweep`, `bossFocus`, `capsule`, `keyGet` (broadcast
 `{id, kid}` — every client clears the floor key instantly; chime/tip only when `id` is you), `wellWake`,
 `sigilNode`, `sigilMatch`, `sigilBlast`, `latticeGrab` (`{at, dur, seed, a0, a1}` — clients replay
@@ -116,8 +124,8 @@ toward `sg` during the surge), and `enc.sig` the round's sigil layout (`c` color
 pillar owners, `s` pillar segments, `g` 9-bit lattice mask, `m` matched flags, `ga` the panel's
 resting sky-ring angle). `enc.sweep`
 carries `a1/a2/w1/w2/on` — the constant angular velocities let the client extrapolate the beam
-angles per frame from snapshot-arrival time (`encAt`), so the beams glide instead of stepping
-at 10 Hz. Keeper enemies
+angles per frame from the server-time base (`encAt = snap.now`), so the beams glide instead of
+stepping at 10 Hz. Keeper enemies
 carry `cl` (pedestal-color index) and `sh` (warded); the herald adds `shp/smh` (ward HP/max —
 the client keeper bar shows the ward in ward-color while it holds); ground keepers (SNIPERS —
 see `ENEMIES.keeper.snipe`) add `aim` (tracked prey id — the client beam follows that player's

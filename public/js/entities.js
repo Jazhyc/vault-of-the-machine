@@ -320,7 +320,7 @@ export class EntityManager {
         this.guardians.set(p.id, v);
       }
       v.data = p;
-      v.interp.push(p.p, p.yaw, now);
+      v.interp.push(p.p, p.yaw, snap.now); // server-time stamp (see Interp)
     }
     for (const [id, v] of this.guardians) {
       if (!seenP.has(id)) {
@@ -341,7 +341,9 @@ export class EntityManager {
       }
       return v;
     }, (v, pr) => {
-      v.p = [...pr.p]; v.v = [...pr.v]; v.at = now;
+      // server-time stamp: ages computed on the server clock make the bolt's
+      // deterministic path exact — arrival-time bases re-stepped it per clump
+      v.p = [...pr.p]; v.v = [...pr.v]; v.at = snap.now;
       if (pr.hx) {
         v.hx = pr.hx;
         // basis ⊥ the flight line — must match the server's derivation
@@ -447,8 +449,11 @@ export class EntityManager {
     }
   }
 
-  update(dt, renderTime, now, myPos = null) {
+  update(dt, renderTime, now, myPos = null, srvNow = null) {
     this.t += dt;
+    // estimated current server time (de-jittered netClock from main.js, with
+    // a last-snapshot fallback) — drives projectile ages and capsule arcs
+    const sNow = srvNow ?? (this.serverNow || 0) + Math.max(0, now - this.lastSnapAt);
     for (const v of this.guardians.values()) {
       const s = v.interp.at(renderTime);
       if (!s) continue;
@@ -471,7 +476,7 @@ export class EntityManager {
       if (d.dn) v.beacon.material.opacity = 0.28 + Math.sin(this.t * 5) * 0.12;
     }
     for (const v of this.projs.values()) {
-      const age = now - v.at;
+      const age = sNow - v.at;
       if (v.hx) {
         // exact parametric corkscrew, smooth at any fps — the generic p+v·age
         // extrapolation below would chord the spiral at the 10 Hz snap rate
@@ -501,7 +506,6 @@ export class EntityManager {
     }
     // capsules tumble out of the wormhole above the boss, arcing down to their
     // beacon-marked landing point (land times are server-clock seconds)
-    const sNow = (this.serverNow || 0) + Math.max(0, now - this.lastSnapAt);
     const wp = ENC.sigil.wormholePos;
     for (const v of this.capsules.values()) {
       const tLeft = (v.land || 0) - sNow;

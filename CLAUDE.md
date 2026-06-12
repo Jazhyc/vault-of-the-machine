@@ -200,7 +200,11 @@ burst ones never regrow.
 Fireteam is 1–6 (`MAX_PLAYERS`); boss HP (rolled at encounter start), keeper HP, wave sizes, and
 the live-add ceiling all scale per player (knobs in `ENC`). Enemy bolts and boss volleys lead
 the target: `fireProjAt`/`leadAim` aim ahead along `p.vel` (estimated from `state` messages,
-teleports discarded), capped at `ENC.leadMax` seconds.
+teleports discarded), capped at `ENC.leadMax` seconds. Husks counter kiting with a lunge
+(`ENEMIES.husk.lunge` — speed-budget rationale commented there): inside the trigger band they
+root for a windup crouch (the stop is the telegraph), then spring along a heading locked at
+launch — strafe or sprint escapes, backpedal doesn't. The pounce arc is server-written `pos[1]`,
+rendered straight off the snapshot — no protocol change.
 
 Gjallarhorn is unlocked **per guardian name**, not per server: only looting the victory cache adds
 the name to `game.gjallyOwners` (persisted as `{gjallyNames}` in `.unlocks.json` via

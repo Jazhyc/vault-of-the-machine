@@ -671,6 +671,8 @@ export class Game {
       hp: hp ?? def.hp, maxHp: hp ?? def.hp,
       nextAtkAt: this.t + rand(0.5, 1.5), strafeDir: Math.random() < 0.5 ? 1 : -1,
       strafeAt: this.t + rand(1, 3),
+      // staggered so a fresh wave can't pounce in unison (husk only)
+      nextLungeAt: this.t + rand(1, 2.5), windupUntil: 0, lungeUntil: 0,
     };
     this.enemies.set(e.id, e);
     return e;
@@ -844,7 +846,27 @@ export class Game {
       e.yaw = Math.atan2(to[0], to[2]);
 
       if (e.type === 'husk') {
-        if (dist > def.atkRange * 0.8) this.moveEnemy(e, to, def.speed, dt);
+        const L = def.lunge;
+        if (e.windupUntil && this.t >= e.windupUntil) {
+          // crouch elapsed → spring toward where the target stands NOW
+          e.windupUntil = 0;
+          e.lungeDir = to;
+          e.lungeUntil = this.t + L.dur;
+        }
+        if (this.t < e.lungeUntil) {
+          this.moveEnemy(e, e.lungeDir, L.speed, dt);
+          // pounce arc — pure flourish, the client renders snapshot y as-is
+          e.pos[1] = Math.sin((1 - (e.lungeUntil - this.t) / L.dur) * Math.PI) * L.hop;
+          if (dist < def.atkRange) { e.lungeUntil = 0; e.pos[1] = 0; } // landed
+        } else if (this.t < e.windupUntil) {
+          // rooted crouch — the sudden stop is the telegraph (yaw still tracks)
+        } else {
+          e.pos[1] = 0;
+          if (dist > L.min && dist < L.max && this.t >= e.nextLungeAt) {
+            e.nextLungeAt = this.t + L.cd + rand(-0.8, 0.8);
+            e.windupUntil = this.t + L.windup;
+          } else if (dist > def.atkRange * 0.8) this.moveEnemy(e, to, def.speed, dt);
+        }
         if (dist < def.atkRange && this.t >= e.nextAtkAt) {
           e.nextAtkAt = this.t + def.atkCd;
           this.dmgPlayer(target, def.dmg, 'husk', [to[0] * def.kb[0], def.kb[1], to[2] * def.kb[0]]);

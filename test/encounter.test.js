@@ -1072,6 +1072,48 @@ const slay = (g, id) => { while (g.enemies.has(id)) g.onMessage('p1', { t: 'hit'
   ok('generator-surge seeker bursts: floor(alive/2) waves, no cross-phase leak');
 }
 
+// ---------- husk lunge: the anti-kite pounce ----------
+{
+  const g = mkGame();
+  g.addPlayer('p1', 'Kiter', 'gunslinger');
+  moveTo(g, 'p1', [0, 0, 1]);
+  advance(g, ENC.readyTime + 0.5);
+  god(g);
+  g.enterDamage(); // no MECH waves here — the conjured husk owns the floor
+  const L = ENEMIES.husk.lunge;
+  const d2 = (a, b) => Math.hypot(a[0] - b[0], a[2] - b[2]);
+  const aim = [12.5, 0, 21.6]; // the seeker test's proven pillar-clear 60° spot
+  const dir = [0.5, 0, 0.866]; // outward along that same ray
+  moveTo(g, 'p1', aim);
+
+  // beyond the band it just walks — no crouch
+  const husk = g.spawnEnemy('husk',
+    [aim[0] + dir[0] * (L.max + 3), 0, aim[2] + dir[2] * (L.max + 3)]);
+  husk.nextLungeAt = 0; husk.nextAtkAt = 0; // spawn jitter off the table
+  advance(g, 0.05);
+  assert.ok(!husk.windupUntil, 'no pounce from beyond the band');
+
+  // inside the band it roots into the crouch — the sudden stop is the telegraph
+  husk.pos = [aim[0] + dir[0] * (L.max - 0.5), 0, aim[2] + dir[2] * (L.max - 0.5)];
+  advance(g, 0.05);
+  assert.ok(husk.windupUntil > g.t, 'in band: the crouch telegraph starts');
+  assert.ok(husk.nextLungeAt > g.t + 1, 'the pounce goes on cooldown as it triggers');
+  const crouched = [...husk.pos];
+  advance(g, L.windup - 0.1);
+  assert.ok(d2(husk.pos, crouched) < 1e-9, 'rooted while it winds up');
+
+  // the spring covers the 5.5 m gap far faster than walk speed ever could,
+  // lands inside melee range, grounds the pounce arc, and converts to a swing
+  msgs = [];
+  advance(g, 0.4); // windup tail + flight (5.5 m at lunge speed ≈ 0.28 s)
+  assert.ok(d2(husk.pos, aim) < ENEMIES.husk.atkRange, 'the pounce lands in melee range');
+  assert.equal(husk.pos[1], 0, 'the pounce arc returns to the floor');
+  assert.ok(msgs.some(x => x.to === 'p1' && x.m.t === 'hurt' && x.m.src === 'husk'),
+    'the landed pounce converts to a swing');
+  assert.ok(husk.nextLungeAt > g.t, 'still on cooldown — no chain-pouncing');
+  ok('husk lunge: band trigger, rooted telegraph, locked spring, cooldown');
+}
+
 // ---------- end-of-encounter scoreboard ----------
 {
   const g = mkGame();

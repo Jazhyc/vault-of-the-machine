@@ -123,7 +123,15 @@ export const ENEMIES = {
   // kb: knockback shove as [horizontal, vertical] m/s. The client computes
   // slam/seeker shoves itself off the FX broadcast (its own live position —
   // the server's view is an RTT stale); husk rides the hurt's imp.
-  husk:    { name: 'Riven Husk',   hp: 120, speed: 5.5, dmg: 22, atkRange: 2.4, atkCd: 1.5, kb: [5, 3] },
+  // lunge: the anti-kite pounce. Inside the min–max band the husk roots for
+  // windup s (the sudden stop IS the telegraph), then springs at lunge speed
+  // along a heading locked at launch — no mid-flight tracking, so a strafe
+  // slips it. Budget vs player speeds (walk 8, sprint 12.5): a backpedaler
+  // opens max + 8·windup ≈ 8.8 m by launch and the dash closes
+  // (20−8)·0.55 = 6.6 m → caught inside atkRange; a sprinter holds ~6.3 m →
+  // sprinting (or a sidestep) escapes. hop is the cosmetic pounce arc.
+  husk:    { name: 'Riven Husk',   hp: 120, speed: 5.5, dmg: 22, atkRange: 2.4, atkCd: 1.5, kb: [5, 3],
+             lunge: { min: 3, max: 6, windup: 0.35, speed: 20, dur: 0.55, cd: 5, hop: 0.9 } },
   acolyte: { name: 'Void Acolyte', hp: 160, speed: 4.6, dmg: 14, fireCd: 3.4, projSpeed: 15, rangeMin: 13, rangeMax: 24 },
   keeper:  { name: 'Vault Keeper', hp: 950, speed: 2.8, dmg: 28, fireCd: 3.6, projSpeed: 13 },
   wisp:    { name: 'Warding Wisp', hp: 80, dmg: 10, fireCd: 4.5, projSpeed: 14, orbitR: 2.9, orbitSpeed: 1.6 },

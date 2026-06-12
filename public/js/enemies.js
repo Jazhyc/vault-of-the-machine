@@ -155,7 +155,7 @@ function buildHusk() {
     shard.rotation.set(0.4 * s, 0.8, 0.3);
     g.add(shard);
   }
-  g.userData.anim = { arms, phase: Math.random() * Math.PI * 2 };
+  g.userData.anim = { arms, ph: Math.random() * Math.PI * 2, spd: 0 };
   return g;
 }
 
@@ -543,12 +543,26 @@ export class EnemyManager {
       }
       v.group.rotation.y = s.yaw;
       if (v.ty === 'husk' && a) {
-        // shamble: hop with the legs it doesn't have, claws raking in counter-swing
-        const ph = this.t * 9 + a.phase;
-        v.group.position.y = Math.abs(Math.sin(ph)) * 0.15;
-        const swing = Math.sin(ph) * 0.35;
-        a.arms[0].rotation.x = -0.7 + swing;
-        a.arms[1].rotation.x = -0.7 - swing;
+        // shamble pace follows real ground speed (snapshot-to-snapshot), so a
+        // rooted husk — the lunge crouch — coils instead of pawing the air.
+        const A = v.interp.a, B = v.interp.b;
+        const raw = (A && B && B.t - A.t > 0.001)
+          ? Math.hypot(B.p[0] - A.p[0], B.p[2] - A.p[2]) / (B.t - A.t) : 0;
+        a.spd += (raw - a.spd) * Math.min(1, dt * 10);
+        const ease = Math.min(1, dt * 14);
+        if (s.p[1] > 0.05) {
+          // airborne mid-pounce (the server-written arc): claws thrown forward
+          a.arms[0].rotation.x += (-1.9 - a.arms[0].rotation.x) * ease;
+          a.arms[1].rotation.x += (-1.9 - a.arms[1].rotation.x) * ease;
+        } else {
+          const k = Math.min(1, a.spd / 4); // walk (5.5) saturates the swing
+          a.ph += dt * (1.5 + a.spd * 1.6); // ~old 9 rad/s cadence at walk
+          // bob ADDS to the snapshot y — never clobber the pounce arc
+          v.group.position.y += Math.abs(Math.sin(a.ph)) * 0.15 * k;
+          const swing = Math.sin(a.ph) * (0.06 + 0.29 * k); // rooted = slow coiled sway
+          a.arms[0].rotation.x += (-0.7 + swing - a.arms[0].rotation.x) * ease;
+          a.arms[1].rotation.x += (-0.7 - swing - a.arms[1].rotation.x) * ease;
+        }
       }
       if (v.ty === 'acolyte' && a) {
         a.torso.position.y = Math.sin(this.t * 2.2 + a.phase) * 0.07;

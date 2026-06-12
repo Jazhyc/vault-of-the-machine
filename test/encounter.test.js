@@ -604,6 +604,38 @@ const slay = (g, id) => { while (g.enemies.has(id)) g.onMessage('p1', { t: 'hit'
   ok('anti-cheat caps & nova gating');
 }
 
+// ---------- in-flight ordnance survives the thrower going down ----------
+// The client gates NEW fire input on alive, but already-launched payloads
+// (grenade arc, thrown nova, swarm shards) keep flying and report on landing —
+// the server must accept them from a downed (not dead) guardian.
+{
+  const g = mkGame();
+  const p = g.addPlayer('p1', 'Thrower', 'voidcaller');
+  g.addPlayer('p2', 'Anchor', 'sentinel'); // keeps one down from becoming a wipe
+  moveTo(g, 'p1', [0, 0, 1]); moveTo(g, 'p2', [0, 0, 1]);
+  advance(g, ENC.readyTime + 0.5);
+  g.enterDamage();
+  p.sup = 100;
+  g.onMessage('p1', { t: 'superCast', dir: [0, 0, -1] }); // nova now in flight
+  g.dmgPlayer(p, 5000, 'test');
+  assert.ok(p.downed && !p.dead, 'thrower is downed mid-flight');
+  const before = g.enc.bossHp;
+  g.onMessage('p1', { t: 'explode', kind: 'nova', p: [0, 8, 0] });
+  assert.ok(g.enc.bossHp < before, 'in-flight nova still detonates while downed');
+  const before2 = g.enc.bossHp;
+  g.onMessage('p1', { t: 'hit', target: 'boss', dmg: 999999, weapon: 'nswarm' });
+  const shard = before2 - g.enc.bossHp;
+  assert.ok(shard > 0 && shard <= DMG_CAPS.nswarm, 'downed swarm shards land, still capped');
+  g.onMessage('p1', { t: 'explode', kind: 'grenade', p: [0, 0, 12] });
+  assert.equal(g.dots.size, 1, 'downed grenade still births the void zone');
+  p.dead = true;
+  const before3 = g.enc.bossHp;
+  g.onMessage('p1', { t: 'hit', target: 'boss', dmg: 50, weapon: 'nswarm' });
+  g.onMessage('p1', { t: 'explode', kind: 'rocket', p: [0, 8, 0] });
+  assert.equal(g.enc.bossHp, before3, 'a dead guardian deals nothing');
+  ok('downed (not dead) ordnance still lands');
+}
+
 // ---------- adaptive wave cadence: a wiped arena refills fast, a crowded one breathes ----------
 {
   const g = mkGame();

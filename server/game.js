@@ -149,7 +149,10 @@ export class Game {
   }
 
   onHit(p, m) {
-    if (!this.alive(p)) return;
+    // downed (not dead) still lands: the client gates NEW fire input on alive,
+    // so a hit arriving while downed is ordnance launched before the fall
+    // (swarm shards, wolfpack) — going down must not void it mid-flight
+    if (p.dead) return;
     let dmg = Math.max(0, Number(m.dmg) || 0);
     const cap = (DMG_CAPS[m.weapon] || 90) * (p.goldenUntil > this.t ? SUPER.golden.mul * 1.05 : 1);
     dmg = Math.min(dmg, cap);
@@ -177,7 +180,7 @@ export class Game {
   }
 
   onExplode(p, m) {
-    if (!this.alive(p) || !Array.isArray(m.p)) return;
+    if (p.dead || !Array.isArray(m.p)) return; // downed ok — see onHit
     const pos = m.p.map(Number);
     if (!pos.every(Number.isFinite)) return;
     let dmg, r, minInterval;
@@ -1439,7 +1442,7 @@ export class Game {
         const q = this.players.get(p.revive.target);
         if (!q || !q.downed || dxz(p.pos, q.pos) > PLAYER.reviveRange + 1) p.revive = null;
         else if (this.t >= p.revive.end) {
-          q.downed = false; q.hp = 80; q.lastDmg = this.t;
+          q.downed = false; q.hp = PLAYER.maxHp; q.lastDmg = this.t;
           this.send(null, { t: 'revived', id: q.id, by: p.name });
           this.toast(`${p.name} revived ${q.name}`, 'good');
           p.revive = null;

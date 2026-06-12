@@ -45,7 +45,10 @@ Three layers:
 
 Hit detection is client-side: the client raycasts and sends `hit {target, dmg, weapon}`. The server
 applies it but clamps via `DMG_CAPS` (per trigger-pull; golden multiplies the cap), gates Nova
-behind `pendingNova` set by a validated `superCast`, and rate-limits `explode` kinds. Any new
+behind `pendingNova` set by a validated `superCast`, and rate-limits `explode` kinds. `hit`/`explode`
+are accepted from DOWNED (not dead) players on purpose: the client gates new fire input on alive,
+so anything arriving while downed is ordnance launched before the fall (grenade arcs, the thrown
+nova, swarm shards) — going down must not void it mid-flight (regression-tested). Any new
 damage path needs a cap or validation server-side, and ideally a test like the existing
 "anti-cheat caps & nova gating" block. The Nova detonation also looses 20 thrower-client homing
 shards (`SUPER.nova.swarm`, the wolfpack/swarm machinery in weapons.js) landing as ordinary

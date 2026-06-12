@@ -193,13 +193,15 @@ export const ENC = {
   finalFrac: 0.25, annihilation: 32,
   // final-stand surge: at the threshold the emergency generator reignites the
   // shield — the boss is immune for surgeDur while seeker bursts launch every
-  // surgeWaveCd (round-robin, so every guardian is hunted) under one sweep that
-  // holds the whole surge: jump the beams between bursts of rocket fire. Each
-  // burst is floor(alive/2) waves (min 1) rippling surgeWaveGap apart — the gap
-  // keeps every fan a distinct, shootable salvo instead of one wrapped-around
-  // wall, and the scaling means a duo feels one wave while a full fireteam
-  // weathers three. The annihilation clock starts only once the generator
-  // gives out.
+  // surgeWaveCd under one sweep that holds the whole surge: jump the beams
+  // between bursts of rocket fire. Each burst is floor(alive/2) waves (min 1)
+  // rippling surgeWaveGap apart — the gap keeps every fan a distinct,
+  // shootable salvo instead of one wrapped-around wall, and the scaling means
+  // a duo feels one wave while a full fireteam weathers three. Every wave is
+  // ONE chain hunting a single guardian (same-target missiles fly the same
+  // line, so one shoot-down can chain-cook the wave); the hunted slot rotates
+  // round-robin ACROSS waves, so every guardian still gets hunted. The
+  // annihilation clock starts only once the generator gives out.
   surgeDur: 30, surgeWaveCd: 2, surgeFirst: 1.5, surgeWaveGap: 0.45,
   // wave cadence is adaptive: each tick the MECH wave timer tightens toward
   // waveCdEmpty + (waveCd − waveCdEmpty) · live-add fill (game.addFill), so a

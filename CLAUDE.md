@@ -213,8 +213,10 @@ as the only dodge; the `sweep` event's client announce hints cover only while `p
 one sweep spins for the whole
 surge (`sweep.until = surgeUntil`) and a seeker burst launches every `surgeWaveCd` — each burst
 is `max(1, floor(alive/2))` waves rippling `surgeWaveGap` apart (`surgeWavesLeft/surgeWaveAt`,
-cleared by `clearPhaseFx` and surge expiry), targets dealt round-robin so every guardian is
-hunted (wave size never below the fireteam). Volley/special
+cleared by `clearPhaseFx` and surge expiry); each wave is ONE chain hunting a single guardian
+(same target = same flight line, so one shoot-down can chain-cook the wave) and the hunted slot
+rotates round-robin ACROSS waves (`surgeIdx`) so every guardian is still hunted (wave size never
+below the fireteam). Volley/special
 timers are parked past `surgeUntil`, `ends` (annihilation) counts from surge end, and `tickBoss`
 drops the shield on expiry and re-broadcasts `shieldBreak` (the client announces the generator
 dying when its last-known phase is FINAL). After the surge, FINAL chains specials faster and

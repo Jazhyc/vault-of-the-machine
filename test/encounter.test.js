@@ -1168,9 +1168,15 @@ const slay = (g, id) => { while (g.enemies.has(id)) g.onMessage('p1', { t: 'hit'
   // four alive → each burst is two waves, the second rippling surgeWaveGap later
   g.enterFinal();
   msgs = [];
-  advance(g, ENC.surgeFirst + ENC.surgeWaveGap * 2); // first burst fully rippled, well before the next at surgeWaveCd
+  const seekers = () => [...g.enemies.values()].filter(e => e.type === 'seeker');
+  advance(g, ENC.surgeFirst + 0.1); // first wave up, second still rippling
+  const w1 = new Set(seekers().map(s => s.target));
+  assert.equal(w1.size, 1, 'a surge wave is one chain: every missile hunts the same guardian');
+  advance(g, ENC.surgeWaveGap); // first burst fully rippled, well before the next at surgeWaveCd
   const burst = msgs.filter(x => x.m.t === 'seekers');
   assert.equal(burst.length, 2, 'four guardians: two waves per burst');
+  const hunted = new Set(seekers().map(s => s.target));
+  assert.equal(hunted.size, 2, 'the second wave rotates to a fresh guardian');
 
   // two left standing → the burst shrinks back to a single wave
   g.players.get('p3').dead = true;
@@ -1183,7 +1189,7 @@ const slay = (g, id) => { while (g.enemies.has(id)) g.onMessage('p1', { t: 'hit'
   g.enc.surgeWavesLeft = 3;
   g.enterDamage();
   assert.equal(g.enc.surgeWavesLeft, 0, 'phase entry kills the rest of a surge burst');
-  ok('generator-surge seeker bursts: floor(alive/2) waves, no cross-phase leak');
+  ok('generator-surge seeker bursts: floor(alive/2) single-chain waves, round-robin hunt, no cross-phase leak');
 }
 
 // ---------- husk lunge: the anti-kite pounce ----------

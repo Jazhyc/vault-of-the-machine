@@ -49,6 +49,7 @@ export class Game {
       nextVolleyAt: 0, nextSlamAt: 0, final: false,
       surgeUntil: 0,              // final-stand generator surge: shield holds until then
       surgeWavesLeft: 0, surgeWaveAt: 0, // remainder of a surge seeker burst (waves ripple surgeWaveGap apart)
+      surgeIdx: 0,                // round-robin cursor: which guardian the next surge wave hunts
       // back-launched homing missiles: salvo = seekerBase + seekerBonus,
       // and the bonus grows by one on every phase entry after the first
       nextSeekerAt: 0, seekerBonus: 0, seekerSeen: false,
@@ -364,7 +365,7 @@ export class Game {
   clearPhaseFx(keepWormhole = false) {
     const e = this.enc;
     e.sweep = null; e.barrageUntil = 0;
-    e.stage = null; e.strikes = []; e.surgeUntil = 0; e.surgeWavesLeft = 0;
+    e.stage = null; e.strikes = []; e.surgeUntil = 0; e.surgeWavesLeft = 0; e.surgeIdx = 0;
     if (!keepWormhole) { e.wormhole = false; e.missileAt = 0; }
   }
 
@@ -1053,12 +1054,16 @@ export class Game {
     const e = this.enc;
     const targets = this.alivePlayers();
     if (!targets.length) return;
-    // during the generator surge every guardian is hunted: targets deal out
-    // round-robin and the wave never runs short of the fireteam
+    // during the generator surge each wave is ONE chain hunting a single
+    // guardian — same-target missiles fly the same line, so one shoot-down
+    // can chain-cook the wave — and the hunted slot rotates round-robin
+    // ACROSS waves, so every guardian still gets hunted; the wave never runs
+    // short of the fireteam so the burst's total pressure keeps pace
     const surging = e.surgeUntil > this.t;
     const n = Math.max(ENC.seekerBase + e.seekerBonus, surging ? targets.length : 0);
     // during damage the whole salvo hunts the marked player, like the volleys
     const focus = e.st === 'DAMAGE' ? targets.find(p => p.id === e.focus) : null;
+    const hunted = focus || (surging ? targets[e.surgeIdx++ % targets.length] : null);
     for (let i = 0; i < n; i++) {
       const a = e.bossYaw + Math.PI + (i - (n - 1) / 2) * 0.5; // fan across the back
       const out = [Math.sin(a), 0, Math.cos(a)];
@@ -1067,7 +1072,7 @@ export class Game {
         ENC.bossPos[1] + 2.5,
         ENC.bossPos[2] + out[2] * (ENC.bossBodyR - 0.8),
       ]);
-      s.target = (focus || (surging ? targets[i % targets.length] : pick(targets))).id;
+      s.target = (hunted || pick(targets)).id;
       s.popUntil = this.t + ENC.seekerPop;      // climb clear of the hull first
       s.launchV = [out[0] * 5, 7, out[2] * 5];
       s.dieAt = this.t + ENC.seekerLife;        // endless kiting still ends

@@ -47,7 +47,7 @@ Hit detection is client-side: the client raycasts and sends `hit {target, dmg, w
 applies it but clamps via `DMG_CAPS` (per trigger-pull; golden multiplies the cap), gates Nova
 behind `pendingNova` set by a validated `superCast`, and rate-limits `explode` kinds. Any new
 damage path needs a cap or validation server-side, and ideally a test like the existing
-"anti-cheat caps & nova gating" block. The Nova detonation also looses 8 thrower-client homing
+"anti-cheat caps & nova gating" block. The Nova detonation also looses 20 thrower-client homing
 shards (`SUPER.nova.swarm`, the wolfpack/swarm machinery in weapons.js) landing as ordinary
 capped `nswarm` hits — the budget rationale is commented on `SUPER.nova`. Damage falloff is client-side: a weapon with
 `WEAPONS[k].falloff {start, min}` (currently shotgun only) scales hitscan damage in `fireHitscan`

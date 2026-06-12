@@ -115,11 +115,12 @@ export const SUPER = {
   // caster mid-flourish must not be a free kill for volleys/snipers.
   cast: { dur: 1.6, apex: 0.9, dr: 0.6 },
   // nova budget: the core blast traded raw punch (was 2600 / 9 m) for a vast
-  // wave plus 8 homing shards (client-side wolfpack machinery landing as
-  // capped `nswarm` hits). Each shard one-shots an acolyte (160 hp); the wave's
-  // rim (falloff bottoms at 0.45× → 675) still erases every ordinary add, so
-  // only keepers and warded things survive the burst.
-  nova:   { kind: 'nova',   dmg: 1500, r: 16, speed: 26, swarm: { n: 8, dmg: 170, speed: 20 } },
+  // wave plus 20 homing shards (client-side wolfpack machinery landing as
+  // capped `nswarm` hits) — most of the super's damage now rides the swarm.
+  // Each shard one-shots an acolyte (160 hp); the wave's rim (falloff bottoms
+  // at 0.45× → 270) still erases every ordinary add, so only keepers and
+  // warded things survive the burst.
+  nova:   { kind: 'nova',   dmg: 600, r: 16, speed: 26, swarm: { n: 20, dmg: 170, speed: 20 } },
   golden: { kind: 'golden', dur: 9, mul: 3.5 },
   ward:   { kind: 'ward',   dur: 12, r: 5.5, heal: 45, dr: 0.5 },
 };

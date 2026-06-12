@@ -185,6 +185,10 @@ export class GameAudio {
     }
   }
   spawnBlip() { this.noise(0.11, 0.3, 950, 3, 'bandpass', 0.06); this.tone(150, 0.07, 0.26, 'sawtooth', 310); }
+  chargeUp(vol = 1, dur = 0.7) { // rising channel-whine: an enemy shot is coming (quiet — a near-threat cue, not an alarm)
+    this.tone(170, 0.03 * vol, dur * 0.35, 'sawtooth', 700, dur * 0.65);
+    this.tone(700, 0.015 * vol, dur * 0.35, 'sine', 1500, dur * 0.65);
+  }
   capsuleDrop() { this.tone(1500, 0.055, 1.1, 'triangle', 460, 0.06); } // falling whistle
   capsuleLand(vol = 1) {
     this.noise(0.16 * vol, 0.09, 750, 1, 'lowpass', 0.002);

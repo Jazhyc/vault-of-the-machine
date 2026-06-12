@@ -132,8 +132,19 @@ export const ENEMIES = {
   // sprinting (or a sidestep) escapes. hop is the cosmetic pounce arc.
   husk:    { name: 'Riven Husk',   hp: 120, speed: 5.5, dmg: 22, atkRange: 2.4, atkCd: 1.5, kb: [5, 3],
              lunge: { min: 3, max: 6, windup: 0.35, speed: 20, dur: 0.55, cd: 5, hop: 0.9 } },
-  acolyte: { name: 'Void Acolyte', hp: 160, speed: 4.6, dmg: 14, fireCd: 3.4, projSpeed: 15, rangeMin: 13, rangeMax: 24 },
-  keeper:  { name: 'Vault Keeper', hp: 950, speed: 2.8, dmg: 28, fireCd: 3.6, projSpeed: 13 },
+  // helix: the bolt corkscrews around its straight lead-aim line. The radius
+  // tapers sin(π·t/T) — zero at the muzzle and at the predicted arrival — so
+  // it lands exactly where a straight bolt would (accuracy untouched); only
+  // the mid-flight convergence point is hard to read. om 6 rad/s ≈ 1–1.5
+  // turns per in-band flight. strafe: in-band slide (m/s — was speed·0.7 =
+  // 3.2, raised to punish lazy tracking) and the flip interval [min, max] s.
+  // chargeT: every ranged shot channels for this long before it leaves —
+  // rooted, snapshot `ch` drives the swelling muzzle orb + rising whine
+  // client-side (bolts were materializing unannounced). The channel also
+  // stretches the effective fire interval to fireCd + chargeT.
+  acolyte: { name: 'Void Acolyte', hp: 160, speed: 4.6, dmg: 14, fireCd: 3.4, projSpeed: 15, rangeMin: 13, rangeMax: 24,
+             chargeT: 0.7, helix: { r: 0.8, om: 6 }, strafe: { spd: 4.2, flip: [0.9, 2.2] } },
+  keeper:  { name: 'Vault Keeper', hp: 950, speed: 2.8, dmg: 28, fireCd: 3.6, projSpeed: 13, chargeT: 0.9 },
   wisp:    { name: 'Warding Wisp', hp: 80, dmg: 10, fireCd: 4.5, projSpeed: 14, orbitR: 2.9, orbitSpeed: 1.6 },
   // static damage-phase objective; immune unless the shooter carries 3 antiviral patches
   blister: { name: 'Viral Blister', hp: 220 },

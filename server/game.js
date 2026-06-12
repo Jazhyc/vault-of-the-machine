@@ -673,6 +673,7 @@ export class Game {
       strafeAt: this.t + rand(1, 3),
       // staggered so a fresh wave can't pounce in unison (husk only)
       nextLungeAt: this.t + rand(1, 2.5), windupUntil: 0, lungeUntil: 0,
+      chargeUntil: 0, // ranged channel telegraph (acolyte / keeper)
     };
     this.enemies.set(e.id, e);
     return e;
@@ -791,11 +792,22 @@ export class Game {
   fireProjAt(from, target, def, k, r) {
     const aim = this.leadAim(from, target, def.projSpeed);
     const d = d3(from, aim) || 1;
-    this.projs.set(nid(), {
-      k, p: [...from],
-      v: [(aim[0] - from[0]) / d * def.projSpeed, (aim[1] - from[1]) / d * def.projSpeed, (aim[2] - from[2]) / d * def.projSpeed],
-      dmg: def.dmg, r, until: this.t + 6,
-    });
+    const v = [(aim[0] - from[0]) / d * def.projSpeed, (aim[1] - from[1]) / d * def.projSpeed, (aim[2] - from[2]) / d * def.projSpeed];
+    const pr = { k, p: [...from], v, dmg: def.dmg, r, until: this.t + 6 };
+    if (def.helix) {
+      // corkscrew (tuning + rationale on ENEMIES.*.helix): the base point
+      // flies the straight lead-aim line; tickProjectiles pins the bolt onto
+      // a tapered helix around it. Basis ⊥ the (near-horizontal) flight line.
+      const dir = [v[0] / def.projSpeed, v[1] / def.projSpeed, v[2] / def.projSpeed];
+      const ul = Math.hypot(dir[2], dir[0]) || 1;
+      const u = [-dir[2] / ul, 0, dir[0] / ul];
+      const w = [dir[1] * u[2], dir[2] * u[0] - dir[0] * u[2], -dir[1] * u[0]];
+      pr.hx = {
+        bp: [...from], bv: [...v], t0: this.t, T: d / def.projSpeed,
+        om: def.helix.om, r: def.helix.r, ph: Math.random() * Math.PI * 2, u, w,
+      };
+    }
+    this.projs.set(nid(), pr);
   }
 
   moveEnemy(e, dir, speed, dt) {
@@ -875,17 +887,26 @@ export class Game {
         // ranged: acolyte / keeper (the sky herald hovers in place above the boss)
         if (e.sky) {
           e.pos[1] = ENC.sigil.finalPos[1] + Math.sin(this.t * 1.4) * 0.6;
+        } else if (e.chargeUntil) {
+          // channeling the shot: rooted — stillness + the muzzle orb is the tell
         } else if (dist > (def.rangeMax || 26)) this.moveEnemy(e, to, def.speed, dt);
         else if (dist < (def.rangeMin || 10)) this.moveEnemy(e, [-to[0], 0, -to[2]], def.speed, dt);
         else if (e.type === 'acolyte') {
-          if (this.t >= e.strafeAt) { e.strafeDir *= -1; e.strafeAt = this.t + rand(1.2, 2.8); }
-          this.moveEnemy(e, [to[2] * e.strafeDir, 0, -to[0] * e.strafeDir], def.speed * 0.7, dt);
+          if (this.t >= e.strafeAt) { e.strafeDir *= -1; e.strafeAt = this.t + rand(...def.strafe.flip); }
+          this.moveEnemy(e, [to[2] * e.strafeDir, 0, -to[0] * e.strafeDir], def.strafe.spd, dt);
         }
-        if (this.t >= e.nextAtkAt && dist < 40) {
-          e.nextAtkAt = this.t + def.fireCd + rand(-0.3, 0.3);
-          const from = [e.pos[0], e.sky ? e.pos[1] : 1.6, e.pos[2]];
-          this.fireProjAt(from, target, def,
-            e.type === 'keeper' ? 'heavy' : 'bolt', e.type === 'keeper' ? 0.7 : 0.45);
+        if (e.chargeUntil) {
+          if (this.t >= e.chargeUntil) {
+            e.chargeUntil = 0;
+            e.nextAtkAt = this.t + def.fireCd + rand(-0.3, 0.3);
+            const from = [e.pos[0], e.sky ? e.pos[1] : 1.6, e.pos[2]];
+            this.fireProjAt(from, target, def,
+              e.type === 'keeper' ? 'heavy' : 'bolt', e.type === 'keeper' ? 0.7 : 0.45);
+          }
+        } else if (this.t >= e.nextAtkAt && dist < 40) {
+          // shots telegraph: the channel is snapshot `ch` (end time); the
+          // muzzle orb + rising whine are client-side off that field
+          e.chargeUntil = this.t + def.chargeT;
         }
       }
     }
@@ -1271,7 +1292,25 @@ export class Game {
         pr.p[1] = ENC.barrageY + ENC.barrageBobAmp * Math.sin(ph);
         pr.v[1] = ENC.barrageBobAmp * pr.bobF * Math.cos(ph);
       }
-      pr.p[0] += pr.v[0] * dt; pr.p[1] += pr.v[1] * dt; pr.p[2] += pr.v[2] * dt;
+      if (pr.hx) {
+        // acolyte corkscrew: the base point flies the straight lead-aim line,
+        // the bolt rides a sin-tapered helix around it (zero radius at muzzle
+        // and predicted arrival — accuracy untouched). Same client trick as
+        // the barrage bob: pin the exact pos each tick, pr.v carries the
+        // finite-difference derivative for the p + v·age extrapolation.
+        const h = pr.hx, age = this.t - h.t0;
+        h.bp[0] += h.bv[0] * dt; h.bp[1] += h.bv[1] * dt; h.bp[2] += h.bv[2] * dt;
+        const rad = Math.sin(Math.PI * Math.min(1, age / h.T)) * h.r;
+        const ph = h.om * age + h.ph;
+        const c = Math.cos(ph) * rad, s = Math.sin(ph) * rad;
+        for (let i = 0; i < 3; i++) {
+          const np = h.bp[i] + h.u[i] * c + h.w[i] * s;
+          pr.v[i] = (np - pr.p[i]) / dt;
+          pr.p[i] = np;
+        }
+      } else {
+        pr.p[0] += pr.v[0] * dt; pr.p[1] += pr.v[1] * dt; pr.p[2] += pr.v[2] * dt;
+      }
       let dead = this.t > pr.until || pr.p[1] < 0 ||
         Math.hypot(pr.p[0], pr.p[2]) > ARENA.radius - 0.3;
       if (!dead) {
@@ -1504,6 +1543,7 @@ export class Game {
       enemies: [...this.enemies.values()].map(en => ({
         id: en.id, ty: en.type, p: en.pos.map(v => Math.round(v * 100) / 100),
         yaw: Math.round(en.yaw * 100) / 100, hp: Math.round(en.hp), mh: en.maxHp,
+        ...(en.chargeUntil ? { ch: Math.round(en.chargeUntil * 100) / 100 } : null),
         ...(en.type === 'keeper' ? {
           cl: en.color, sh: !!en.shielded,
           ...(en.shieldHp != null ? { shp: Math.max(0, Math.round(en.shieldHp)), smh: en.shieldMax } : null),
@@ -1511,6 +1551,17 @@ export class Game {
       })),
       projs: [...this.projs.entries()].map(([id, pr]) => ({
         id, k: pr.k, p: pr.p.map(v => Math.round(v * 100) / 100), v: pr.v.map(v => Math.round(v * 100) / 100),
+        // helix bolts also carry their curve params: the client replays the
+        // exact parametric corkscrew per frame (the p + v·age extrapolation
+        // visibly chords a 6 rad/s spiral at 10 Hz) and draws the trail
+        // analytically off the same curve. a = seconds already flown.
+        ...(pr.hx ? { hx: {
+          bp: pr.hx.bp.map(v => Math.round(v * 100) / 100),
+          bv: pr.hx.bv.map(v => Math.round(v * 100) / 100),
+          a: Math.round((this.t - pr.hx.t0) * 1000) / 1000,
+          T: Math.round(pr.hx.T * 1000) / 1000,
+          ph: Math.round(pr.hx.ph * 100) / 100, om: pr.hx.om, r: pr.hx.r,
+        } } : null),
       })),
       bricks: [...this.bricks.entries()].map(([id, b]) => ({ id, k: b.kind, p: b.p })),
       caps: [...this.caps.entries()].map(([id, c]) => ({ id, p: c.p, land: Math.round(c.landAt * 100) / 100 })),

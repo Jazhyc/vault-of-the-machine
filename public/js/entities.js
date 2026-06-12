@@ -120,6 +120,49 @@ function buildProjMesh(k) {
   if (k === 'hell') m.add(noRay(new THREE.Mesh(HELL_CAGE_GEO, HELL_CAGE_MAT)));
   return m;
 }
+
+// Corkscrew-bolt trails: a fixed pool of Lines (created once in the
+// EntityManager constructor — never per spawned bolt), vertex colors fading
+// head→black under additive blending (additive black = invisible). The trail
+// needs no history buffer: it IS the helix curve's recent past, evaluated
+// analytically each frame from the snapshot's hx params.
+const TRAIL_PTS = 24, TRAIL_SPAN = 0.55, TRAIL_POOL = 10;
+const TRAIL_MAT = new THREE.LineBasicMaterial({ vertexColors: true, transparent: true,
+  blending: THREE.AdditiveBlending, depthWrite: false });
+function buildTrail() {
+  const geo = new THREE.BufferGeometry();
+  const pos = new THREE.BufferAttribute(new Float32Array(TRAIL_PTS * 3), 3);
+  pos.setUsage(THREE.DynamicDrawUsage);
+  geo.setAttribute('position', pos);
+  const col = new Float32Array(TRAIL_PTS * 3);
+  const c = new THREE.Color(0x46c8ff); // the bolt cyan
+  for (let i = 0; i < TRAIL_PTS; i++) {
+    const f = (1 - i / (TRAIL_PTS - 1)) ** 2;
+    col[i * 3] = c.r * f; col[i * 3 + 1] = c.g * f; col[i * 3 + 2] = c.b * f;
+  }
+  geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  const line = noRay(new THREE.Line(geo, TRAIL_MAT));
+  line.frustumCulled = false; // positions churn every frame; skip stale-bounds culling
+  line.visible = false;
+  return line;
+}
+
+// Position on a bolt's corkscrew `age` seconds after its latest snapshot
+// (negative age = the recent past, for the trail). Mirrors the server math in
+// tickProjectiles exactly; t clamps at launch so a young bolt's trail can't
+// poke back out of the muzzle.
+const _hp = [0, 0, 0];
+function helixAt(v, age, out) {
+  const h = v.hx;
+  const t = Math.max(0, h.a + age);
+  const rad = Math.sin(Math.PI * Math.min(1, t / h.T)) * h.r;
+  const ph = h.om * t + h.ph;
+  const c = Math.cos(ph) * rad, s = Math.sin(ph) * rad;
+  const a2 = t - h.a; // clamped age, relative to the snapshot base point
+  out[0] = h.bp[0] + h.bv[0] * a2 + v.hxU[0] * c + v.hxW[0] * s;
+  out[1] = h.bp[1] + h.bv[1] * a2 + v.hxU[1] * c + v.hxW[1] * s;
+  out[2] = h.bp[2] + h.bv[2] * a2 + v.hxU[2] * c + v.hxW[2] * s;
+}
 const BRICK_GEO = new THREE.BoxGeometry(0.5, 0.3, 0.3);
 const BRICK_MATS = {
   heavy: new THREE.MeshBasicMaterial({ color: 0xc77dff }),
@@ -167,6 +210,9 @@ const WELL_MATS = {
 export function buildEntityWarmup() {
   const g = new THREE.Group();
   for (const k of Object.keys(PROJ_STYLE)) g.add(buildProjMesh(k));
+  const trail = buildTrail(); // compile the vertexColors+additive line program
+  trail.visible = true;       // (all-zero positions — draws degenerate)
+  g.add(trail);
   g.add(new THREE.Mesh(BRICK_GEO, BRICK_MATS.heavy));
   g.add(new THREE.Mesh(BRICK_GEO, BRICK_MATS.energy));
   g.add(new THREE.Mesh(PILL_GEO, PILL_MAT));
@@ -232,6 +278,13 @@ export class EntityManager {
     scene.add(this.focusRing);
     this.guardians = new Map();
     this.projs = new Map();
+    // corkscrew-bolt trails — pooled at boot (see buildTrail), assigned per
+    // helix bolt, released when the bolt leaves the snapshot
+    this.trailPool = Array.from({ length: TRAIL_POOL }, () => {
+      const l = buildTrail();
+      scene.add(l);
+      return l;
+    });
     this.bricks = new Map();
     this.wells = new Map();
     this.capsules = new Map();
@@ -281,8 +334,24 @@ export class EntityManager {
     this.syncSet(this.projs, snap.projs, (pr) => {
       const m = buildProjMesh(pr.k);
       this.scene.add(m);
-      return { mesh: m, spin: (PROJ_STYLE[pr.k] || PROJ_STYLE.bolt).spin };
-    }, (v, pr) => { v.p = [...pr.p]; v.v = [...pr.v]; v.at = now; });
+      const v = { mesh: m, spin: (PROJ_STYLE[pr.k] || PROJ_STYLE.bolt).spin };
+      if (pr.hx) {
+        v.trail = this.trailPool.find(l => !l.userData.used) || null; // dry pool = just no trail
+        if (v.trail) v.trail.userData.used = true;
+      }
+      return v;
+    }, (v, pr) => {
+      v.p = [...pr.p]; v.v = [...pr.v]; v.at = now;
+      if (pr.hx) {
+        v.hx = pr.hx;
+        // basis ⊥ the flight line — must match the server's derivation
+        const b = pr.hx.bv, sp = Math.hypot(b[0], b[1], b[2]) || 1;
+        const d = [b[0] / sp, b[1] / sp, b[2] / sp];
+        const ul = Math.hypot(d[2], d[0]) || 1;
+        v.hxU = [-d[2] / ul, 0, d[0] / ul];
+        v.hxW = [d[1] * v.hxU[2], d[2] * v.hxU[0] - d[0] * v.hxU[2], -d[1] * v.hxU[0]];
+      }
+    });
 
     this.syncSet(this.bricks, snap.bricks, (b) => {
       const m = noRay(new THREE.Mesh(BRICK_GEO, BRICK_MATS[b.k] || BRICK_MATS.energy));
@@ -370,7 +439,11 @@ export class EntityManager {
       apply(v, item);
     }
     for (const [id, v] of map) {
-      if (!seen.has(id)) { this.scene.remove(v.mesh); map.delete(id); }
+      if (!seen.has(id)) {
+        this.scene.remove(v.mesh);
+        if (v.trail) { v.trail.visible = false; v.trail.userData.used = false; }
+        map.delete(id);
+      }
     }
   }
 
@@ -399,7 +472,23 @@ export class EntityManager {
     }
     for (const v of this.projs.values()) {
       const age = now - v.at;
-      v.mesh.position.set(v.p[0] + v.v[0] * age, v.p[1] + v.v[1] * age, v.p[2] + v.v[2] * age);
+      if (v.hx) {
+        // exact parametric corkscrew, smooth at any fps — the generic p+v·age
+        // extrapolation below would chord the spiral at the 10 Hz snap rate
+        helixAt(v, age, _hp);
+        v.mesh.position.set(_hp[0], _hp[1], _hp[2]);
+        if (v.trail) {
+          const attr = v.trail.geometry.attributes.position;
+          for (let i = 0; i < TRAIL_PTS; i++) {
+            helixAt(v, age - (i / (TRAIL_PTS - 1)) * TRAIL_SPAN, _hp);
+            attr.setXYZ(i, _hp[0], _hp[1], _hp[2]);
+          }
+          attr.needsUpdate = true;
+          v.trail.visible = true;
+        }
+      } else {
+        v.mesh.position.set(v.p[0] + v.v[0] * age, v.p[1] + v.v[1] * age, v.p[2] + v.v[2] * age);
+      }
       if (v.spin) { v.mesh.rotation.x += dt * v.spin * 0.6; v.mesh.rotation.y += dt * v.spin; }
     }
     for (const v of this.bricks.values()) {

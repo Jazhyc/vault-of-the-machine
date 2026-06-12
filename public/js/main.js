@@ -418,10 +418,18 @@ const volAt = (p) => player
   ? Math.max(0.15, Math.min(1, 1 - Math.hypot(player.pos.x - p[0], player.pos.z - p[2]) / 55))
   : 1;
 const capsTracked = new Map(); // capsule id -> { land, landed, p }
-let lastSpawnSfx = 0, lastDieSfx = 0, stepIn = 0.1, prevGrounded = true, prevVy = 0, heartbeatIn = 0, lastTickSec = -1;
+let lastSpawnSfx = 0, lastDieSfx = 0, lastChargeSfx = 0, stepIn = 0.1, prevGrounded = true, prevVy = 0, heartbeatIn = 0, lastTickSec = -1;
 enemies.onSpawn = () => { // one portal blip per spawn burst, not one per add
   const n = performance.now();
   if (n - lastSpawnSfx > 350) { lastSpawnSfx = n; audio.spawnBlip(); }
+};
+enemies.onCharge = (ty, p, dur) => { // close-quarters cue only — silent past ~18 m
+  if (!player) return;
+  const d = Math.hypot(player.pos.x - p[0], player.pos.z - p[2]);
+  const vol = Math.max(0, 1 - d / 18) ** 2; // steep: ~half gone by 6 m
+  if (!vol) return;
+  const n = performance.now();
+  if (n - lastChargeSfx > 250) { lastChargeSfx = n; audio.chargeUp(vol, dur); } // one whine per beat even if a wave channels in sync
 };
 
 // ---------- net events ----------

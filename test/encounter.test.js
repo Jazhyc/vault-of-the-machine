@@ -727,10 +727,13 @@ const slay = (g, id) => { while (g.enemies.has(id)) g.onMessage('p1', { t: 'hit'
   const unledVx = (pPos[0] - acoPos[0]) / unledLen * ENEMIES.acolyte.projSpeed;
   g.projs.clear();
   aco.nextAtkAt = g.t;
-  g.tick(0.05);
+  g.tick(0.05); // the channel telegraph starts…
+  advance(g, ENEMIES.acolyte.chargeT + 0.1); // …and releases
   const bolt = [...g.projs.values()].find(pr => pr.k === 'bolt');
   assert.ok(bolt, 'acolyte fired');
-  assert.ok(bolt.v[0] > unledVx + 2, 'bolt aims ahead of the strafing target, not at it');
+  // judge the launch aim from the helix base velocity — the live v carries
+  // the corkscrew's tangential derivative on top of it
+  assert.ok(bolt.hx.bv[0] > unledVx + 2, 'bolt aims ahead of the strafing target, not at it');
   ok('enemy projectiles lead the target\'s trajectory');
 }
 
@@ -1112,6 +1115,76 @@ const slay = (g, id) => { while (g.enemies.has(id)) g.onMessage('p1', { t: 'hit'
     'the landed pounce converts to a swing');
   assert.ok(husk.nextLungeAt > g.t, 'still on cooldown — no chain-pouncing');
   ok('husk lunge: band trigger, rooted telegraph, locked spring, cooldown');
+}
+
+// ---------- acolyte corkscrew bolts + harder strafe ----------
+{
+  const g = mkGame();
+  g.addPlayer('p1', 'Weaver', 'gunslinger');
+  moveTo(g, 'p1', [0, 0, 1]);
+  advance(g, ENC.readyTime + 0.5);
+  god(g);
+  g.enterDamage();
+  const aim = [12.5, 1, 21.6]; // chest height on the proven pillar-clear 60° ray
+  const dir = [0.5, 0, 0.866];
+  moveTo(g, 'p1', [12.5, 0, 21.6]);
+
+  // a bolt fired up the clear corridor weaves off the straight chord…
+  const from = [2.5, 1.6, 4.33]; // ~20 m down-range on the same ray
+  g.fireProjAt(from, g.players.get('p1'), ENEMIES.acolyte, 'bolt', 0.45);
+  const [bid, bolt] = [...g.projs.entries()].find(([, pr]) => pr.k === 'bolt');
+  assert.ok(bolt.hx, 'acolyte bolts carry the helix');
+  // the snapshot ships the curve params — the client replays the exact
+  // parametric corkscrew (and its trail) instead of chording 10 Hz samples
+  g.broadcastSnapshot();
+  const snapPr = msgs.findLast(x => x.m.t === 'snap').m.projs.find(p => p.id === bid);
+  for (const f of ['bp', 'bv', 'a', 'T', 'ph', 'om', 'r']) {
+    assert.ok(snapPr.hx[f] !== undefined, `snapshot helix carries ${f}`);
+  }
+  const n = [aim[0] - from[0], aim[1] - from[1], aim[2] - from[2]];
+  const nl = Math.hypot(...n); n.forEach((c, i) => n[i] = c / nl);
+  let maxDev = 0;
+  msgs = [];
+  for (let i = 0; i < 40 && g.projs.has(bid); i++) {
+    advance(g, 0.05);
+    const rel = [bolt.p[0] - from[0], bolt.p[1] - from[1], bolt.p[2] - from[2]];
+    const along = rel[0] * n[0] + rel[1] * n[1] + rel[2] * n[2];
+    const dev = Math.hypot(rel[0] - n[0] * along, rel[1] - n[1] * along, rel[2] - n[2] * along);
+    maxDev = Math.max(maxDev, dev);
+    if (msgs.some(x => x.to === 'p1' && x.m.t === 'hurt' && x.m.src === 'bolt')) break;
+  }
+  assert.ok(maxDev > 0.5, `mid-flight the bolt leaves the straight line (peak ${maxDev.toFixed(2)} m)`);
+  // …yet the sin taper still delivers it dead on target
+  assert.ok(msgs.some(x => x.to === 'p1' && x.m.t === 'hurt' && x.m.src === 'bolt'),
+    'the tapered helix still lands the hit');
+
+  // strafe reads its shared tuning: one tick in-band slides at strafe.spd, ⊥ to the prey
+  const S = ENEMIES.acolyte.strafe;
+  const aco = g.spawnEnemy('acolyte', [12.5 - dir[0] * 18, 0, 21.6 - dir[2] * 18]);
+  const before = [...aco.pos];
+  advance(g, 0.05);
+  const d = [aco.pos[0] - before[0], aco.pos[2] - before[2]];
+  assert.ok(Math.abs(Math.hypot(...d) - S.spd * 0.05) < 0.02, 'in-band slide moves at strafe.spd');
+  assert.ok(Math.abs(d[0] * dir[0] + d[1] * dir[2]) < 0.05, 'the slide is perpendicular to the prey line');
+
+  // ranged shots channel first: rooted, snapshot-flagged, THEN the bolt
+  const bolts = () => [...g.projs.values()].filter(pr => pr.k === 'bolt').length;
+  aco.nextAtkAt = 0;
+  msgs = [];
+  advance(g, 0.05);
+  assert.ok(aco.chargeUntil > g.t, 'the shot channels before it leaves');
+  assert.equal(bolts(), 0, 'no bolt mid-channel');
+  g.broadcastSnapshot();
+  const se = msgs.findLast(x => x.m.t === 'snap').m.enemies.find(en => en.id === aco.id);
+  assert.ok(se.ch > 0, 'snapshot carries the charge end-time for the muzzle orb');
+  const rooted = [...aco.pos];
+  advance(g, ENEMIES.acolyte.chargeT - 0.15);
+  assert.ok(Math.hypot(aco.pos[0] - rooted[0], aco.pos[2] - rooted[2]) < 1e-9, 'rooted while channeling');
+  advance(g, 0.3);
+  assert.equal(aco.chargeUntil, 0, 'the channel releases');
+  assert.equal(bolts(), 1, 'the bolt leaves at channel end');
+  assert.ok(aco.nextAtkAt > g.t + 1, 'fire cooldown counts from the release');
+  ok('acolyte: corkscrew bolts weave yet land, strafe + charge telegraph on shared tuning');
 }
 
 // ---------- end-of-encounter scoreboard ----------

@@ -200,7 +200,16 @@ burst ones never regrow.
 Fireteam is 1–6 (`MAX_PLAYERS`); boss HP (rolled at encounter start), keeper HP, wave sizes, and
 the live-add ceiling all scale per player (knobs in `ENC`). Enemy bolts and boss volleys lead
 the target: `fireProjAt`/`leadAim` aim ahead along `p.vel` (estimated from `state` messages,
-teleports discarded), capped at `ENC.leadMax` seconds. Husks counter kiting with a lunge
+teleports discarded), capped at `ENC.leadMax` seconds. Acolyte bolts corkscrew
+(`ENEMIES.acolyte.helix`): a sin-tapered helix around the straight lead-aim line — zero radius at
+muzzle and predicted arrival, so accuracy is untouched. The snapshot ships the curve params
+(`hx {bp, bv, a, T, ph, om, r}`) and the client replays the exact parametric curve per frame
+(`helixAt` in entities.js — `p + v·age` extrapolation would chord a 6 rad/s spiral at 10 Hz)
+plus an analytic pooled-line trail (`trailPool`, no history buffer — the trail is the curve's
+recent past); the strafe tuning lives in `ENEMIES.acolyte.strafe`. Acolyte and keeper shots
+channel for `chargeT` s before firing (rooted; snapshot `ch` = charge end-time drives the
+swelling muzzle orb in enemies.js and the throttled `onCharge` → `audio.chargeUp` whine in
+main.js — effective fire interval is `fireCd + chargeT`). Husks counter kiting with a lunge
 (`ENEMIES.husk.lunge` — speed-budget rationale commented there): inside the trigger band they
 root for a windup crouch (the stop is the telegraph), then spring along a heading locked at
 launch — strafe or sprint escapes, backpedal doesn't. The pounce arc is server-written `pos[1]`,

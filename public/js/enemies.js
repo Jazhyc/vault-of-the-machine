@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { ARENA, ENC } from '/shared/constants.js';
+import { ARENA, ENC, ENEMIES } from '/shared/constants.js';
 
 const noRay = (o) => { o.raycast = () => {}; return o; };
 // scratch vectors for per-frame seeker orientation (no per-frame allocation)
@@ -45,6 +45,7 @@ const GEO = {
   acoFace: new THREE.BoxGeometry(0.36, 0.28, 0.07),
   acoEmblem: new THREE.OctahedronGeometry(0.15),
   acoReceiver: new THREE.BoxGeometry(0.26, 0.3, 0.5),
+  chargeOrb: new THREE.SphereGeometry(0.2, 8, 8), // ranged channel telegraph (acolyte + keeper)
   acoBarrel: new THREE.CylinderGeometry(0.12, 0.16, 1.1, 6).rotateX(Math.PI / 2),
   acoMuzzle: new THREE.CylinderGeometry(0.06, 0.11, 0.22, 6).rotateX(Math.PI / 2),
   // keeper — armored construct elite (also the herald, which hangs inverted in the sky)
@@ -105,6 +106,9 @@ const MAT = {
   acoRobe: new THREE.MeshStandardMaterial({ color: 0x161030, roughness: 0.8, side: THREE.DoubleSide }),
   acoHead: new THREE.MeshStandardMaterial({ color: 0x241a44, emissive: 0x46c8ff, emissiveIntensity: 0.9, roughness: 0.4 }),
   acoTrim: new THREE.MeshBasicMaterial({ color: 0x46c8ff }),
+  // charge orbs match their projectile colors (PROJ_STYLE bolt / heavy)
+  chargeBolt: new THREE.MeshBasicMaterial({ color: 0x46c8ff, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false }),
+  chargeHeavy: new THREE.MeshBasicMaterial({ color: 0xc77dff, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false }),
   keep: new THREE.MeshStandardMaterial({ color: 0x33214f, roughness: 0.5, metalness: 0.5 }),
   keepHead: new THREE.MeshStandardMaterial({ color: 0x5533aa, emissive: 0xc77dff, emissiveIntensity: 1.1, roughness: 0.3 }),
   keepGlow: new THREE.MeshBasicMaterial({ color: 0xc77dff }),
@@ -191,10 +195,13 @@ function buildAcolyte() {
   barrel.position.z = 0.3;
   const muzzle = noRay(new THREE.Mesh(GEO.acoMuzzle, MAT.acoTrim));
   muzzle.position.z = 0.95;
-  cannon.add(receiver, barrel, muzzle);
+  const chargeOrb = noRay(new THREE.Mesh(GEO.chargeOrb, MAT.chargeBolt));
+  chargeOrb.position.z = 1.1; // at the muzzle tip
+  chargeOrb.visible = false;
+  cannon.add(receiver, barrel, muzzle, chargeOrb);
   torso.add(cannon);
   g.add(torso);
-  g.userData.anim = { torso, emblem, phase: Math.random() * Math.PI * 2 };
+  g.userData.anim = { torso, emblem, chargeOrb, phase: Math.random() * Math.PI * 2 };
   return g;
 }
 
@@ -237,8 +244,11 @@ function buildKeeper() {
     shard.rotation.set(0.5, a, 0.3);
     halo.add(shard);
   }
-  g.add(halo);
-  g.userData.anim = { halo, head };
+  const chargeOrb = noRay(new THREE.Mesh(GEO.chargeOrb, MAT.chargeHeavy));
+  chargeOrb.position.set(0, 2.45, 1.25); // floating just off the chest sigil
+  chargeOrb.visible = false;
+  g.add(halo, chargeOrb);
+  g.userData.anim = { halo, head, chargeOrb };
   return g;
 }
 
@@ -466,6 +476,10 @@ export class EnemyManager {
       }
       v.sh = !!e.sh; // warded keepers — weapons read this for IMMUNE feedback
       v.shp = e.shp; // herald only: the ward's own (breakable) health
+      // ranged charge telegraph: map the server end-time onto the local anim
+      // clock; the rising edge fires the whine foley hook once per channel
+      if (e.ch && !v.chEnd && this.onCharge) this.onCharge(e.ty, e.p, ENEMIES[e.ty].chargeT);
+      v.chEnd = e.ch ? this.t + (e.ch - snap.now) : 0;
       v.interp.push(e.p, e.yaw, now);
       if (v.hpBar) {
         // while the herald's ward holds, its bar tracks the ward in ward-color
@@ -563,6 +577,14 @@ export class EnemyManager {
           a.arms[0].rotation.x += (-0.7 + swing - a.arms[0].rotation.x) * ease;
           a.arms[1].rotation.x += (-0.7 - swing - a.arms[1].rotation.x) * ease;
         }
+      }
+      if (a && a.chargeOrb) {
+        if (v.chEnd && this.t < v.chEnd) {
+          // swell from spark to bolt-size across the channel, with a flutter
+          const k = Math.max(0, 1 - (v.chEnd - this.t) / (ENEMIES[v.ty].chargeT || 1));
+          a.chargeOrb.visible = true;
+          a.chargeOrb.scale.setScalar(0.25 + k * 1.05 + Math.sin(this.t * 34) * 0.08 * k);
+        } else a.chargeOrb.visible = false;
       }
       if (v.ty === 'acolyte' && a) {
         a.torso.position.y = Math.sin(this.t * 2.2 + a.phase) * 0.07;

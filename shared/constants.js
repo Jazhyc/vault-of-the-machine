@@ -249,9 +249,9 @@ export const ENC = {
   wipeDelay: 5, victoryDelay: 30,
   // volley: fast enough that you slot into the gaps between the three orbs
   // instead of outrunning them; the spread keeps those gaps standable at range.
-  // Cadence tightens when the boss is exposed — standing on the crit core has
-  // to cost constant attention, especially in round 1 when no specials exist.
-  volleyCdMech: 5, volleyCdDmg: 3, volleyCdFinal: 2, volleyDmg: 30, volleySpeed: 22, volleySpread: 0.2,
+  // DAMAGE/FINAL only — standing on the crit core has to cost constant
+  // attention, but the puzzle phase stays readable without it.
+  volleyCdDmg: 3, volleyCdFinal: 2, volleyDmg: 30, volleySpeed: 22, volleySpread: 0.2,
   slamRange: 9.5, slamCd: 6, slamDmg: 45, slamKb: [14, 9], // kb: see ENEMIES
   // boss-wake shockwave (harmless, cinematic): hurls the fireteam off the
   // center plate toward the arena edge. A one-shot impulse can't carry that

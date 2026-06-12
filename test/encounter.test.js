@@ -900,6 +900,27 @@ const slay = (g, id) => { while (g.enemies.has(id)) g.onMessage('p1', { t: 'hit'
   ok('rhythmic barrage fires spiraling, bobbing, unjumpable rings');
 }
 
+// ---------- triple-orb volley fires only while the boss is exposed ----------
+{
+  const g = mkGame();
+  g.addPlayer('p1', 'Dodger', 'gunslinger');
+  moveTo(g, 'p1', [0, 0, 1]);
+  advance(g, ENC.readyTime + 0.5);
+  god(g);
+  assert.equal(g.enc.st, 'MECH');
+  msgs = [];
+  advance(g, 20); // far past any volley cadence
+  assert.ok(!msgs.some(x => x.m.t === 'bossVolley'), 'no volleys during the puzzle phase');
+  assert.ok(![...g.projs.values()].some(p => p.k === 'bossOrb'), 'no boss orbs in flight during MECH');
+
+  g.enterDamage();
+  msgs = [];
+  advance(g, ENC.volleyCdDmg + 3);
+  // (no in-flight orb check: at point-blank the orbs land and despawn within a tick)
+  assert.ok(msgs.some(x => x.m.t === 'bossVolley'), 'volleys open up in the damage phase');
+  ok('triple-orb volley is DAMAGE/FINAL-only');
+}
+
 // ---------- phase entries clear running specials (no cross-phase leaks) ----------
 {
   const g = mkGame();

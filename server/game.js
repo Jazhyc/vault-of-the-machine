@@ -373,7 +373,7 @@ export class Game {
     e.sigil = { ...rollSigil(), grid: 0, matched: [false, false] };
     e.nextWaveAt = this.t + 3;
     e.nextKeeperAt = this.t + ENC.firstKeeperDelay;
-    e.nextVolleyAt = this.t + 5; e.nextSlamAt = this.t + 3;
+    e.nextSlamAt = this.t + 3; // volleys are DAMAGE/FINAL-only; enterDamage/enterFinal arm them
     e.nextSpecialAt = this.t + ENC.specialFirstDelay;
     e.nextSeekerAt = this.t + ENC.seekerFirst;
     if (round > 1) e.seekerBonus++;
@@ -1241,8 +1241,11 @@ export class Game {
       }
     }
 
-    const volleyCd = e.st === 'FINAL' ? ENC.volleyCdFinal : e.st === 'DAMAGE' ? ENC.volleyCdDmg : ENC.volleyCdMech;
-    if ((overlap || (!sweeping && e.barrageUntil <= this.t)) && this.t >= e.nextVolleyAt) {
+    // the triple-orb volley belongs to the exposed phases only — the puzzle
+    // rounds already have adds/keepers/specials contesting attention
+    const volleyCd = e.st === 'FINAL' ? ENC.volleyCdFinal : ENC.volleyCdDmg;
+    if (['DAMAGE', 'FINAL'].includes(e.st)
+      && (overlap || (!sweeping && e.barrageUntil <= this.t)) && this.t >= e.nextVolleyAt) {
       e.nextVolleyAt = this.t + volleyCd;
       const targets = this.alivePlayers();
       if (targets.length) {

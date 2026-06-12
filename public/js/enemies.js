@@ -463,17 +463,31 @@ export class EnemyManager {
     this.scene.add(g);
     this.targets.push(body, core);
 
-    // sweep lasers: two full-diameter beams at shin height (shared material)
-    const beamMat = new THREE.MeshBasicMaterial({ color: 0xff3d5e, transparent: true, opacity: 0, depthWrite: false });
+    // sweep lasers: two full-diameter beams at shin height. Each is a thin
+    // white-hot core cylinder inside a glow sheath inside a barely-there haze
+    // sized to the real hit band (sweepWidth half-width — the laser must read
+    // thin without lying about where it wounds). Nested additive 3D volumes,
+    // not coplanar quads, so they sum without z-fighting. Geometries and
+    // materials are shared between both beams; the sheaths ride as children
+    // so the warmup's visible-toggle draws (and compiles) all three.
+    const beamCoreGeo = new THREE.CylinderGeometry(0.07, 0.07, 76, 8, 1, true).rotateZ(Math.PI / 2);
+    const beamGlowGeo = new THREE.CylinderGeometry(0.3, 0.3, 76, 8, 1, true).rotateZ(Math.PI / 2);
+    const beamHazeGeo = new THREE.CylinderGeometry(ENC.sweepWidth, ENC.sweepWidth, 76, 8, 1, true).rotateZ(Math.PI / 2);
+    const beamMat = new THREE.MeshBasicMaterial({ color: 0xffe6ea, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending });
+    const beamGlowMat = new THREE.MeshBasicMaterial({ color: 0xff3d5e, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending });
+    const beamHazeMat = new THREE.MeshBasicMaterial({ color: 0xff3d5e, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending });
     this.beams = [0, 1].map(() => {
-      const b = new THREE.Mesh(new THREE.BoxGeometry(76, 0.9, 1.1), beamMat);
-      b.raycast = () => {};
+      const b = noRay(new THREE.Mesh(beamCoreGeo, beamMat));
+      b.add(noRay(new THREE.Mesh(beamGlowGeo, beamGlowMat)));
+      b.add(noRay(new THREE.Mesh(beamHazeGeo, beamHazeMat)));
       b.position.y = 0.9;
       b.visible = false;
       this.scene.add(b);
       return b;
     });
     this.beamMat = beamMat;
+    this.beamGlowMat = beamGlowMat;
+    this.beamHazeMat = beamHazeMat;
   }
 
   // bossWake: the dormant hull drops out of the hover (position is cosmetic to
@@ -767,8 +781,22 @@ export class EnemyManager {
       this.beams[0].visible = this.beams[1].visible = true;
       this.beams[0].rotation.y = -(sw.a1 + (sw.w1 || 0) * ext);
       this.beams[1].rotation.y = -(sw.a2 + (sw.w2 || 0) * ext);
-      this.beamMat.opacity = sw.on ? 0.75 : 0.15 + (Math.sin(this.t * 12) + 1) * 0.1;
-      this.beamMat.color.set(sw.on ? 0xff3d5e : 0xffb3c0);
+      if (sw.on) {
+        // live: near-white core, fast-flickering red sheath, faint hit-band haze
+        this.beamMat.opacity = 0.95;
+        this.beamMat.color.set(0xffe6ea);
+        this.beamGlowMat.opacity = 0.42 + (Math.sin(this.t * 40) + 1) * 0.06;
+        this.beamGlowMat.color.set(0xff3d5e);
+        this.beamHazeMat.opacity = 0.09;
+      } else {
+        // warning trace: a dim pink line pulsing up toward ignition
+        const pulse = (Math.sin(this.t * 12) + 1) * 0.5;
+        this.beamMat.opacity = 0.22 + pulse * 0.22;
+        this.beamMat.color.set(0xffb3c0);
+        this.beamGlowMat.opacity = 0.04 + pulse * 0.07;
+        this.beamGlowMat.color.set(0xff8099);
+        this.beamHazeMat.opacity = 0.02 + pulse * 0.03;
+      }
     } else if (this.beams[0].visible) {
       this.beams[0].visible = this.beams[1].visible = false;
     }

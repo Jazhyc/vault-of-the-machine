@@ -562,7 +562,9 @@ export class BotManager {
 
   // Utility scores, not omniscience: ordnance and immediate threats first,
   // leaning into the class fantasy — voidcallers sweep adds, the gunslinger
-  // melts the boss, everyone answers seekers. Warded enemies and blisters
+  // melts the boss, seekers are defended but never trivialized (see the
+  // seeker branch below — the converging-salvo chain makes any reliable
+  // interception a wave-deleter). Warded enemies and blisters
   // belong to the fireteam's mechanics and are never targeted.
   pickTarget(b) {
     const g = this.game, p = b.p, e = g.enc;
@@ -591,14 +593,16 @@ export class BotManager {
         const age = g.t - ((en.dieAt ?? g.t) - ENC.seekerLife);
         if (age < BOTS.seekerNotice) continue;
         if (!mine) {
-          // peeling is a last-moment assist, never an automated screen: only
-          // missiles hunting a HUMAN, only once they bear down on them, and
-          // only ONE interceptor squad-wide — a converging salvo flies one
-          // line, so any earlier kill chain-cooks the entire wave and the
-          // mechanic stops threatening anyone. Echoes being hunted handle
-          // their own missile (the designed sprint + fire counterplay).
+          // peeling is a CLUTCH SAVE, never an automated screen: one kill
+          // chain-cooks a converging salvo, so reliable interception at any
+          // range deletes whole waves. The squad shoots a missile off a
+          // human's back only when that human is wounded enough to be in
+          // real danger, it's bearing down on them, and only ONE interceptor
+          // squad-wide. Echoes being hunted handle their own missile (the
+          // designed sprint + fire counterplay).
           const prey = g.players.get(en.target);
-          if (!prey || prey.bot || dxz(en.pos, prey.pos) > BOTS.seekerAssistR) continue;
+          if (!prey || prey.bot || prey.hp >= PLAYER.maxHp * BOTS.seekerSaveHp
+            || dxz(en.pos, prey.pos) > BOTS.seekerAssistR) continue;
           let peelerBusy = false;
           for (const ob of this.brains.values()) {
             if (ob === b || !ob.target || ob.target === 'boss') continue;

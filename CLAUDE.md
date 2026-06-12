@@ -190,8 +190,14 @@ per-player encounter scaling deliberately counts bots. `acc` sets per-trigger-pu
 add-clear is further humanized (echoes must help, not vacuum the arena) by `react` (aim-settle
 beat on every target switch — each kill costs a re-aim), `burst`/`burstRest` (trigger
 discipline vs small adds), `addAcc` (tracking penalty vs strafing bodies), and `spreadFire`
-(score penalty that splits the squad's fire across targets). Boss fire, keepers, and seeker
-defense are exempt from the discipline by design.
+(score penalty that splits the squad's fire across targets). Boss fire and keepers are exempt
+from the discipline by design. **Seekers are defended, never trivialized**: one shoot-down
+chain-cooks a converging salvo, so ANY reliable echo interception deletes whole waves — an
+echo therefore fights only the missile hunting IT (the designed sprint + fire counterplay),
+notices it `seekerNotice` s after launch, tracks it at `seekerAcc`, and peels a human's missile
+only as a clutch save (ONE interceptor, hunted human below `seekerSaveHp`, missile inside
+`seekerAssistR` of them). Hull splash (rockets/novas during exposed phases) still cooks fresh
+launches incidentally — same physics human ordnance gets.
 
 Summoning: planting the banner rings it with soul-signs (`refreshSigns`, snapshot `signs`,
 interact → `trySummon`, LOBBY-only). A human joining a full server evicts the newest echo

@@ -149,7 +149,19 @@ export const ENEMIES = {
   // stretches the effective fire interval to fireCd + chargeT.
   acolyte: { name: 'Void Acolyte', hp: 160, speed: 4.6, dmg: 14, fireCd: 3.4, projSpeed: 15, rangeMin: 13, rangeMax: 24,
              chargeT: 0.7, helix: { r: 0.8, om: 6 }, strafe: { spd: 4.2, flip: [0.9, 2.2] } },
-  keeper:  { name: 'Vault Keeper', hp: 950, speed: 2.8, dmg: 28, fireCd: 3.6, projSpeed: 13, chargeT: 0.9 },
+  // keeper = SNIPER. snipe: TRACK (laser glued to its prey for track s) →
+  // LOCK (the beam freezes for lock s on the point the prey's CURRENT
+  // momentum reaches at the shot — chest height, no vertical lead) → an
+  // instantaneous, perfectly accurate hit for dmgFrac of max HP on whoever
+  // stands within hitR of that point. The counterplay is a momentum change
+  // inside the lock window (brake, reverse, jump) or hard cover — pillars
+  // block the shot (losBlocked). lock must comfortably exceed the ~0.1–0.15 s
+  // snapshot lag so the frozen beam is readable before the crack.
+  // fireCd/projSpeed/chargeT drive only the sky herald's heavy lobs (it keeps
+  // the old ranged behavior — its fight is about standing in the pedestal
+  // circle, where momentum-dodging would fight the objective).
+  keeper:  { name: 'Vault Keeper', hp: 950, speed: 2.8, dmg: 28, fireCd: 3.6, projSpeed: 13, chargeT: 0.9,
+             snipe: { range: 34, track: 1.6, lock: 0.6, cd: 4.2, hitR: 1.4, dmgFrac: 0.5, kb: [4, 2] } },
   wisp:    { name: 'Warding Wisp', hp: 80, dmg: 10, fireCd: 4.5, projSpeed: 14, orbitR: 2.9, orbitSpeed: 1.6 },
   // static damage-phase objective; immune unless the shooter carries 3 antiviral patches
   blister: { name: 'Viral Blister', hp: 220 },
@@ -181,7 +193,11 @@ export const ENC = {
   // weathers three. The annihilation clock starts only once the generator
   // gives out.
   surgeDur: 30, surgeWaveCd: 2, surgeFirst: 1.5, surgeWaveGap: 0.45,
-  waveCd: 18, addCapBase: 8, addCapPer: 4, firstKeeperDelay: 6,
+  // wave cadence is adaptive: each tick the MECH wave timer tightens toward
+  // waveCdEmpty + (waveCd − waveCdEmpty) · live-add fill (game.addFill), so a
+  // nova-wiped arena refills in seconds while a near-cap arena keeps the slow
+  // breath — pressure recovers from wipes without ever stacking past the cap
+  waveCd: 18, waveCdEmpty: 5, addCapBase: 8, addCapPer: 4, firstKeeperDelay: 6,
   readyTime: 3, readyRadius: 4,
   // rally banner: planted on the white circle directly ahead of spawn (same
   // radial, 6 m toward the center) during LOBBY only; each guardian can rally

@@ -103,7 +103,11 @@ carries `a1/a2/w1/w2/on` — the constant angular velocities let the client extr
 angles per frame from snapshot-arrival time (`encAt`), so the beams glide instead of stepping
 at 10 Hz. Keeper enemies
 carry `cl` (pedestal-color index) and `sh` (warded); the herald adds `shp/smh` (ward HP/max —
-the client keeper bar shows the ward in ward-color while it holds). `caps` (with `land`
+the client keeper bar shows the ward in ward-color while it holds); ground keepers (SNIPERS —
+see `ENEMIES.keeper.snipe`) add `aim` (tracked prey id — the client beam follows that player's
+live position) and, while locked, `lk`/`ft` (frozen kill-point + fire time); the instant shot is
+the one-shot `snipe {id, p, hit}` broadcast (railgun tracer + crack; the victim's `hurt` has
+src `snipe`). `caps` (with `land`
 server-time) and `keys`
 are id-keyed pickup lists like `bricks`; `banner` is a one-off object like `chest`. Timers in
 snapshots are absolute server seconds; the client keeps `serverOffset` from `snap.now`.
@@ -208,10 +212,17 @@ muzzle and predicted arrival, so accuracy is untouched. The snapshot ships the c
 (`hx {bp, bv, a, T, ph, om, r}`) and the client replays the exact parametric curve per frame
 (`helixAt` in entities.js — `p + v·age` extrapolation would chord a 6 rad/s spiral at 10 Hz)
 plus an analytic pooled-line trail (`trailPool`, no history buffer — the trail is the curve's
-recent past); the strafe tuning lives in `ENEMIES.acolyte.strafe`. Acolyte and keeper shots
+recent past); the strafe tuning lives in `ENEMIES.acolyte.strafe`. Acolyte and sky-herald shots
 channel for `chargeT` s before firing (rooted; snapshot `ch` = charge end-time drives the
 swelling muzzle orb in enemies.js and the throttled `onCharge` → `audio.chargeUp` whine in
-main.js — effective fire interval is `fireCd + chargeT`). Husks counter kiting with a lunge
+main.js — effective fire interval is `fireCd + chargeT`). Ground keepers are SNIPERS
+(`tickSniper`; design + numbers on `ENEMIES.keeper.snipe`): a rooted TRACK phase glues a laser
+to one prey, LOCK freezes the beam on the momentum-predicted kill-point (no vertical lead — a
+jump dodges), then an instant, perfectly accurate shot takes `dmgFrac` of max HP from whoever
+stands within `hitR`; pillars block it (`losBlocked`), and the counterplay is breaking momentum
+inside the lock window. Client: pooled beams/reticle in enemies.js (`drawLaser`, track follows
+the live local position via the `playerPosOf` hook), `lockWarn` blip when the lock names you,
+`snipeFlash` tracer on the broadcast. Husks counter kiting with a lunge
 (`ENEMIES.husk.lunge` — speed-budget rationale commented there): inside the trigger band they
 root for a windup crouch (the stop is the telegraph), then spring along a heading locked at
 launch — strafe or sprint escapes, backpedal doesn't. The pounce arc is server-written `pos[1]`,

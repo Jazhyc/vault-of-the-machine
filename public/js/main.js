@@ -423,6 +423,14 @@ enemies.onSpawn = () => { // one portal blip per spawn burst, not one per add
   const n = performance.now();
   if (n - lastSpawnSfx > 350) { lastSpawnSfx = n; audio.spawnBlip(); }
 };
+// keeper sniper beam endpoints: the local player's beam tracks your LIVE
+// position (the server's view is an RTT stale); remotes use their interp views
+enemies.playerPosOf = (id) => {
+  if (player && id === net.myId) return [player.pos.x, player.pos.y + 1.0, player.pos.z];
+  const v = entities && entities.guardians.get(id);
+  return v ? [v.g.position.x, v.g.position.y + 1.0, v.g.position.z] : null;
+};
+enemies.onSnipeLock = (id) => { if (id === net.myId) audio.lockWarn(); }; // the frozen beam found YOU
 enemies.onCharge = (ty, p, dur) => { // close-quarters cue only — silent past ~18 m
   if (!player) return;
   const d = Math.hypot(player.pos.x - p[0], player.pos.z - p[2]);
@@ -698,6 +706,11 @@ net.on('missile', () => {
 // boss seekers: salvo launch off the back, and a boom wherever one lands
 // (shot-down seekers pop via the regular enemyDied path instead)
 net.on('seekers', (m) => audio.seekerLaunch(m.n, volAt(ENC.bossPos)));
+net.on('snipe', (m) => { // keeper railgun: instant — the tracer IS the shot
+  enemies.snipeFlash(m.id, m.p);
+  audio.snipeShot(volAt(m.p));
+});
+
 net.on('seekerBoom', (m) => {
   effects.explosion(new THREE.Vector3(m.p[0], m.p[1], m.p[2]), 'seeker');
   audio.explosion(false, volAt(m.p));

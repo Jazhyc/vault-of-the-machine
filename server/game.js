@@ -673,7 +673,8 @@ export class Game {
       strafeAt: this.t + rand(1, 3),
       // staggered so a fresh wave can't pounce in unison (husk only)
       nextLungeAt: this.t + rand(1, 2.5), windupUntil: 0, lungeUntil: 0,
-      chargeUntil: 0, // ranged channel telegraph (acolyte / keeper)
+      chargeUntil: 0, // ranged channel telegraph (acolyte / sky herald)
+      snPhase: null, snUntil: 0, snTarget: null, // keeper sniper cycle
     };
     this.enemies.set(e.id, e);
     return e;
@@ -748,14 +749,20 @@ export class Game {
 
   gainSuper(p, amt) { p.sup = Math.min(100, p.sup + amt); }
 
+  // Live small-add pressure as a 0..1 fill of the per-player ceiling — drives
+  // the adaptive wave cadence and the spawn cap. Seekers are boss ordnance and
+  // keepers/blisters are objectives: none of them count against the waves.
+  addFill() {
+    const small = [...this.enemies.values()].filter(e => !['keeper', 'blister', 'seeker'].includes(e.type)).length;
+    return Math.min(1, small / (ENC.addCapBase + ENC.addCapPer * this.players.size));
+  }
+
   spawnWave() {
     const n = this.players.size, round = this.enc.round;
     // waves and the live-add ceiling scale per player: 2n husks + n acolytes
     const husks = Math.min(2 + 2 * n + (round - 1), 4 + 2 * n);
     const acolytes = Math.min(1 + n + Math.floor((round - 1) / 2), 2 + n);
-    // seekers are boss ordnance, not adds — they must not starve the waves
-    const small = [...this.enemies.values()].filter(e => !['keeper', 'blister', 'seeker'].includes(e.type)).length;
-    if (small >= ENC.addCapBase + ENC.addCapPer * n) return;
+    if (this.addFill() >= 1) return;
     for (let i = 0; i < husks; i++) {
       const g = pick(ARENA.gates);
       this.spawnEnemy('husk', [g.p[0] + rand(-3, 3), 0, g.p[2] + rand(-3, 3)]);
@@ -883,8 +890,10 @@ export class Game {
           e.nextAtkAt = this.t + def.atkCd;
           this.dmgPlayer(target, def.dmg, 'husk', [to[0] * def.kb[0], def.kb[1], to[2] * def.kb[0]]);
         }
+      } else if (e.type === 'keeper' && !e.sky) {
+        this.tickSniper(e, target, dist, to, dt);
       } else {
-        // ranged: acolyte / keeper (the sky herald hovers in place above the boss)
+        // ranged: acolyte / sky herald (which hovers in place above the boss)
         if (e.sky) {
           e.pos[1] = ENC.sigil.finalPos[1] + Math.sin(this.t * 1.4) * 0.6;
         } else if (e.chargeUntil) {
@@ -926,6 +935,73 @@ export class Game {
         }
       }
     }
+  }
+
+  // Keeper sniper cycle (design + numbers on ENEMIES.keeper.snipe): TRACK
+  // glues the laser to one prey, LOCK freezes it on the momentum-predicted
+  // point, then the shot lands instantly and perfectly on that point. Rooted
+  // through both phases — the stillness + beam is the telegraph.
+  tickSniper(e, target, dist, to, dt) {
+    const S = ENEMIES.keeper.snipe;
+    if (e.snPhase === 'track') {
+      const tp = this.players.get(e.snTarget);
+      if (!tp || tp.dead || tp.downed) { e.snPhase = null; e.snUntil = 0; return; }
+      e.yaw = Math.atan2(tp.pos[0] - e.pos[0], tp.pos[2] - e.pos[2]);
+      if (this.t >= e.snUntil) {
+        e.snPhase = 'lock';
+        e.snUntil = this.t + S.lock;
+        // freeze the kill-point where CURRENT momentum puts the prey at the
+        // shot (chest height, no vertical lead — a well-timed jump dodges)
+        e.lockP = [tp.pos[0] + tp.vel[0] * S.lock, tp.pos[1] + 1.0, tp.pos[2] + tp.vel[2] * S.lock];
+      }
+    } else if (e.snPhase === 'lock') {
+      if (this.t >= e.snUntil) {
+        e.snPhase = null; e.snUntil = 0;
+        e.nextAtkAt = this.t + S.cd + rand(-0.4, 0.4);
+        this.fireSnipe(e);
+      }
+    } else if (dist > S.range) this.moveEnemy(e, to, ENEMIES.keeper.speed, dt);
+    else if (this.t >= e.nextAtkAt) {
+      e.snPhase = 'track'; e.snUntil = this.t + S.track; e.snTarget = target.id;
+    }
+  }
+
+  fireSnipe(e) {
+    const S = ENEMIES.keeper.snipe;
+    const lp = e.lockP;
+    // perfectly accurate at the LOCKED point: hits whoever stands in hitR of
+    // it at the shot — usually the prey, unless they broke momentum in time
+    let victim = null, bd = S.hitR;
+    if (!this.losBlocked([e.pos[0], 2.45, e.pos[2]], lp)) {
+      for (const p of this.alivePlayers()) {
+        const d = d3([p.pos[0], p.pos[1] + 1.0, p.pos[2]], lp);
+        if (d < bd) { bd = d; victim = p; }
+      }
+    }
+    if (victim) {
+      const dx = victim.pos[0] - e.pos[0], dz = victim.pos[2] - e.pos[2];
+      const dl = Math.hypot(dx, dz) || 1;
+      this.dmgPlayer(victim, Math.round(PLAYER.maxHp * S.dmgFrac), 'snipe',
+        [dx / dl * S.kb[0], S.kb[1], dz / dl * S.kb[0]]);
+    }
+    this.send(null, {
+      t: 'snipe', id: e.id, p: lp.map(v => Math.round(v * 100) / 100),
+      hit: victim ? victim.id : null,
+    });
+  }
+
+  // 2D segment vs pillar discs, height-checked at the crossing — hard cover
+  // breaks a sniper shot. The arena center is deliberately NOT a blocker:
+  // the boss hovers, the plate below is open ground.
+  losBlocked(a, b) {
+    const dx = b[0] - a[0], dz = b[2] - a[2];
+    const l2 = dx * dx + dz * dz || 1;
+    for (const pil of ARENA.pillars) {
+      const t = Math.max(0, Math.min(1, ((pil.p[0] - a[0]) * dx + (pil.p[2] - a[2]) * dz) / l2));
+      const cx = a[0] + dx * t - pil.p[0], cz = a[2] + dz * t - pil.p[2];
+      if (Math.hypot(cx, cz) < pil.r && a[1] + (b[1] - a[1]) * t < pil.h) return true;
+    }
+    return false;
   }
 
   // Specials run faster while the boss is exposed, faster still in the final stand.
@@ -1437,6 +1513,15 @@ export class Game {
       case 'MECH': {
         // spawning pauses while the boss partitions the arena
         if (!e.sweep) {
+          // Adaptive cadence: the due time tightens each tick toward
+          // waveCdEmpty + (waveCd − waveCdEmpty)·addFill, so a wave-wipe
+          // (nova) refills the arena in seconds while a crowded one keeps the
+          // slow breath. Tighten-only (Math.min), and only when the timer is
+          // normally scheduled — parked timers (the tests' t+999 hush) stay parked.
+          if (e.nextWaveAt <= this.t + ENC.waveCd) {
+            e.nextWaveAt = Math.min(e.nextWaveAt,
+              this.t + ENC.waveCdEmpty + (ENC.waveCd - ENC.waveCdEmpty) * this.addFill());
+          }
           if (this.t >= e.nextWaveAt) { e.nextWaveAt = this.t + ENC.waveCd; this.spawnWave(); }
           if (!e.stage && this.t >= e.nextKeeperAt) this.spawnKeepers();
         }
@@ -1547,6 +1632,12 @@ export class Game {
         ...(en.type === 'keeper' ? {
           cl: en.color, sh: !!en.shielded,
           ...(en.shieldHp != null ? { shp: Math.max(0, Math.round(en.shieldHp)), smh: en.shieldMax } : null),
+          // sniper laser: `aim` = tracked prey (client glues the beam to its
+          // LIVE position); `lk` = the frozen kill-point, `ft` = fire time
+          ...(en.snPhase ? {
+            aim: en.snTarget,
+            ...(en.snPhase === 'lock' ? { lk: en.lockP.map(v => Math.round(v * 100) / 100), ft: Math.round(en.snUntil * 100) / 100 } : null),
+          } : null),
         } : null),
       })),
       projs: [...this.projs.entries()].map(([id, pr]) => ({

@@ -185,6 +185,11 @@ export class GameAudio {
     }
   }
   spawnBlip() { this.noise(0.11, 0.3, 950, 3, 'bandpass', 0.06); this.tone(150, 0.07, 0.26, 'sawtooth', 310); }
+  snipeShot(vol = 1) { // instantaneous railgun crack
+    this.noise(0.32 * vol, 0.14, 2600, 4, 'highpass', 0.001);
+    this.tone(1300, 0.16 * vol, 0.22, 'sawtooth', 160);
+  }
+  lockWarn() { this.seq([1568, 1568], 95, f => this.tone(f, 0.16, 0.06, 'square')); } // sniper lock found you
   chargeUp(vol = 1, dur = 0.7) { // rising channel-whine: an enemy shot is coming (quiet — a near-threat cue, not an alarm)
     this.tone(170, 0.03 * vol, dur * 0.35, 'sawtooth', 700, dur * 0.65);
     this.tone(700, 0.015 * vol, dur * 0.35, 'sine', 1500, dur * 0.65);

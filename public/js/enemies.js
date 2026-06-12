@@ -4,7 +4,17 @@ import { ARENA, ENC, ENEMIES } from '/shared/constants.js';
 const noRay = (o) => { o.raycast = () => {}; return o; };
 // scratch vectors for per-frame seeker orientation (no per-frame allocation)
 const _Z = new THREE.Vector3(0, 0, 1);
+const _Y = new THREE.Vector3(0, 1, 0);
 const _dir = new THREE.Vector3();
+
+// stretch a unit-cylinder mesh between two points (keeper sniper beams)
+function spanBeam(mesh, ax, ay, az, bx, by, bz, r) {
+  _dir.set(bx - ax, by - ay, bz - az);
+  const len = _dir.length() || 0.001;
+  mesh.position.set((ax + bx) / 2, (ay + by) / 2, (az + bz) / 2);
+  mesh.scale.set(r, len, r);
+  mesh.quaternion.setFromUnitVectors(_Y, _dir.normalize());
+}
 
 // Smooth interpolation between the last two snapshots.
 export class Interp {
@@ -45,7 +55,9 @@ const GEO = {
   acoFace: new THREE.BoxGeometry(0.36, 0.28, 0.07),
   acoEmblem: new THREE.OctahedronGeometry(0.15),
   acoReceiver: new THREE.BoxGeometry(0.26, 0.3, 0.5),
-  chargeOrb: new THREE.SphereGeometry(0.2, 8, 8), // ranged channel telegraph (acolyte + keeper)
+  chargeOrb: new THREE.SphereGeometry(0.2, 8, 8), // ranged channel telegraph (acolyte / herald)
+  laserBeam: new THREE.CylinderGeometry(1, 1, 1, 6, 1, true), // unit — spanBeam scales it
+  lockRing: new THREE.TorusGeometry(1, 0.05, 6, 24), // sniper kill-point reticle
   acoBarrel: new THREE.CylinderGeometry(0.12, 0.16, 1.1, 6).rotateX(Math.PI / 2),
   acoMuzzle: new THREE.CylinderGeometry(0.06, 0.11, 0.22, 6).rotateX(Math.PI / 2),
   // keeper — armored construct elite (also the herald, which hangs inverted in the sky)
@@ -109,6 +121,8 @@ const MAT = {
   // charge orbs match their projectile colors (PROJ_STYLE bolt / heavy)
   chargeBolt: new THREE.MeshBasicMaterial({ color: 0x46c8ff, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false }),
   chargeHeavy: new THREE.MeshBasicMaterial({ color: 0xc77dff, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false }),
+  // sniper laser base — cloned per pooled beam (color/opacity animate per instance)
+  snipeLaser: new THREE.MeshBasicMaterial({ color: 0xc77dff, transparent: true, opacity: 0.3, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }),
   keep: new THREE.MeshStandardMaterial({ color: 0x33214f, roughness: 0.5, metalness: 0.5 }),
   keepHead: new THREE.MeshStandardMaterial({ color: 0x5533aa, emissive: 0xc77dff, emissiveIntensity: 1.1, roughness: 0.3 }),
   keepGlow: new THREE.MeshBasicMaterial({ color: 0xc77dff }),
@@ -356,6 +370,25 @@ export class EnemyManager {
     this.t = 0;
     this.bossDeathT = -1;
     this.bossWakeT = -1;      // descent start; -1 = not falling (see wake())
+    // keeper sniper FX: pooled beams + lock reticles (twin keepers + margin)
+    // and two one-shot muzzle-flash beams — all scene-level, built at boot
+    this.lasers = Array.from({ length: 4 }, () => {
+      const beam = noRay(new THREE.Mesh(GEO.laserBeam, MAT.snipeLaser.clone()));
+      const ring = noRay(new THREE.Mesh(GEO.lockRing, MAT.snipeLaser.clone()));
+      ring.rotation.x = Math.PI / 2;
+      beam.visible = ring.visible = false;
+      beam.frustumCulled = ring.frustumCulled = false; // spans churn every frame
+      scene.add(beam, ring);
+      return { beam, ring };
+    });
+    this.flashes = Array.from({ length: 2 }, () => {
+      const beam = noRay(new THREE.Mesh(GEO.laserBeam, MAT.snipeLaser.clone()));
+      beam.visible = false;
+      beam.frustumCulled = false;
+      scene.add(beam);
+      return { beam, t0: -1 };
+    });
+    this.laserCount = 0;
     this.buildBoss();
   }
 
@@ -480,6 +513,11 @@ export class EnemyManager {
       // clock; the rising edge fires the whine foley hook once per channel
       if (e.ch && !v.chEnd && this.onCharge) this.onCharge(e.ty, e.p, ENEMIES[e.ty].chargeT);
       v.chEnd = e.ch ? this.t + (e.ch - snap.now) : 0;
+      // sniper laser: aim = tracked prey id, lk = the frozen kill-point. The
+      // rising lock edge pings main.js (warning blip when the mark is you)
+      if (e.lk && !v.lk && this.onSnipeLock) this.onSnipeLock(e.aim);
+      v.aim = e.aim || null;
+      v.lk = e.lk || null;
       v.interp.push(e.p, e.yaw, now);
       if (v.hpBar) {
         // while the herald's ward holds, its bar tracks the ward in ward-color
@@ -492,6 +530,54 @@ export class EnemyManager {
     }
     this.enc = snap.enc;
     this.encAt = now; // arrival time — base for sweep-beam angle extrapolation
+  }
+
+  // Keeper sniper beam off the snapshot state: TRACK glues it to the prey's
+  // LIVE position (local player = your real pos via the main.js playerPosOf
+  // hook — the server's view is an RTT stale), LOCK pins it to the frozen
+  // kill-point with a hot pulse + reticle ring: that spot is the dodge.
+  drawLaser(v) {
+    if (!v.aim || this.laserCount >= this.lasers.length) return;
+    let b = v.lk, lock = true;
+    if (!b) { lock = false; b = this.playerPosOf ? this.playerPosOf(v.aim) : null; }
+    if (!b) return;
+    const L = this.lasers[this.laserCount++];
+    const g = v.group.position, yaw = v.group.rotation.y;
+    const ax = g.x + Math.sin(yaw) * 0.95, ay = g.y + 2.45, az = g.z + Math.cos(yaw) * 0.95;
+    const mat = L.beam.material;
+    if (lock) {
+      mat.color.setHex(0xff3d5e);
+      mat.opacity = 0.65 + Math.sin(this.t * 28) * 0.2;
+      spanBeam(L.beam, ax, ay, az, b[0], b[1], b[2], 0.07);
+      L.ring.visible = true;
+      L.ring.position.set(b[0], b[1], b[2]);
+      L.ring.scale.setScalar(0.55 + Math.sin(this.t * 16) * 0.1);
+      L.ring.material.color.setHex(0xff3d5e);
+      L.ring.material.opacity = 0.85;
+    } else {
+      mat.color.setHex(0xc77dff);
+      mat.opacity = 0.28;
+      spanBeam(L.beam, ax, ay, az, b[0], b[1], b[2], 0.035);
+      L.ring.visible = false;
+    }
+    L.beam.visible = true;
+  }
+
+  // One-shot railgun tracer for the `snipe` broadcast (instant hit — no
+  // projectile to watch, so the line IS the shot).
+  snipeFlash(id, p) {
+    const f = this.flashes.find(f => f.t0 < 0);
+    if (!f) return;
+    const v = this.views.get(id);
+    let ax = p[0], ay = p[1] + 14, az = p[2]; // keeper view gone: drop from above
+    if (v) {
+      const g = v.group.position, yaw = v.group.rotation.y;
+      ax = g.x + Math.sin(yaw) * 0.95; ay = g.y + 2.45; az = g.z + Math.cos(yaw) * 0.95;
+    }
+    f.t0 = this.t;
+    f.beam.material.color.setHex(0xfff0f4);
+    spanBeam(f.beam, ax, ay, az, p[0], p[1], p[2], 0.12);
+    f.beam.visible = true;
   }
 
   removeView(id, v) {
@@ -515,6 +601,7 @@ export class EnemyManager {
 
   update(dt, renderTime, camera) {
     this.t += dt;
+    this.laserCount = 0; // stateless per-frame pool walk (drawLaser)
     // blister materials are shared by every sac — one pulse drives them all;
     // glows hot once YOUR fire can burst them
     const pulse = this.localEmpowered
@@ -593,6 +680,7 @@ export class EnemyManager {
       if (v.ty === 'keeper' && a) {
         a.halo.rotation.y += dt * 0.9;
         a.head.rotation.y += dt * 0.6;
+        if (!v.sky) this.drawLaser(v); // ground keepers are the snipers
       }
       if (v.ty === 'wisp' && a) {
         a.core.rotation.y += dt * 1.6;
@@ -605,6 +693,18 @@ export class EnemyManager {
         v.shield.visible = !!v.sh;
         if (v.sh) v.shield.scale.setScalar(1 + Math.sin(this.t * 3) * 0.05);
       }
+    }
+    // sniper FX housekeeping: hide unclaimed pool beams, fade the shot flashes
+    for (let i = this.laserCount; i < this.lasers.length; i++) {
+      this.lasers[i].beam.visible = false;
+      this.lasers[i].ring.visible = false;
+    }
+    for (const f of this.flashes) {
+      if (f.t0 < 0) continue;
+      const k = (this.t - f.t0) / 0.16;
+      if (k >= 1) { f.t0 = -1; f.beam.visible = false; continue; }
+      f.beam.material.opacity = 0.95 * (1 - k);
+      f.beam.scale.x = f.beam.scale.z = 0.12 * (1 - k * 0.7);
     }
     // boss
     const b = this.boss, enc = this.enc;

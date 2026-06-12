@@ -1193,6 +1193,84 @@ const slay = (g, id) => { while (g.enemies.has(id)) g.onMessage('p1', { t: 'hit'
   ok('acolyte: corkscrew bolts weave yet land, strafe + charge telegraph on shared tuning');
 }
 
+// ---------- keeper snipers: track → lock-lead → instant shot ----------
+{
+  const S = ENEMIES.keeper.snipe;
+  const g = mkGame();
+  g.addPlayer('p1', 'Mark', 'gunslinger');
+  moveTo(g, 'p1', [0, 0, 1]);
+  advance(g, ENC.readyTime + 0.5);
+  god(g);
+  g.enterDamage(); // quiet room: no MECH waves, adds cleared at entry
+  moveTo(g, 'p1', [12.5, 0, 21.6]);
+  const kpr = g.spawnEnemy('keeper', [2.5, 0, 4.33]); // ~20 m down the clear 60° ray
+  kpr.nextAtkAt = 0;
+  const snipesAt = () => msgs.filter(x => x.m.t === 'snipe');
+
+  // cycle opens: rooted track glued to the prey, snapshot carries the aim
+  msgs = [];
+  advance(g, 0.05);
+  assert.equal(kpr.snPhase, 'track', 'the laser starts tracking');
+  assert.equal(kpr.snTarget, 'p1');
+  const stood = [...kpr.pos];
+  g.broadcastSnapshot();
+  let se = msgs.findLast(x => x.m.t === 'snap').m.enemies.find(en => en.id === kpr.id);
+  assert.equal(se.aim, 'p1', 'snapshot names the tracked prey');
+  assert.ok(!se.lk, 'no kill-point while tracking');
+
+  // a stationary prey gets locked exactly where it stands…
+  advance(g, S.track + 0.1);
+  assert.equal(kpr.snPhase, 'lock', 'track hands over to lock');
+  assert.ok(Math.hypot(kpr.lockP[0] - 12.5, kpr.lockP[2] - 21.6) < 0.01, 'no velocity → no lead');
+  assert.ok(Math.hypot(kpr.pos[0] - stood[0], kpr.pos[2] - stood[2]) < 1e-9, 'rooted through the cycle');
+  g.broadcastSnapshot();
+  se = msgs.findLast(x => x.m.t === 'snap').m.enemies.find(en => en.id === kpr.id);
+  assert.ok(se.lk && se.ft > g.t, 'snapshot carries the frozen kill-point and fire time');
+
+  // …and the instant shot lands for half max HP
+  msgs = [];
+  advance(g, S.lock + 0.1);
+  assert.equal(snipesAt().length, 1, 'one snipe crack broadcast');
+  assert.equal(snipesAt()[0].m.hit, 'p1');
+  const hurt = msgs.find(x => x.to === 'p1' && x.m.t === 'hurt' && x.m.src === 'snipe');
+  assert.equal(hurt.m.dmg, Math.round(PLAYER.maxHp * S.dmgFrac), 'the hit takes half of max HP');
+  assert.ok(kpr.nextAtkAt > g.t + 1, 'sniper cooldown counts from the shot');
+
+  // a prey that KEEPS its momentum is led perfectly: walk +x at 8 m/s through
+  // the whole cycle — the lock leads ahead, the walker arrives on schedule
+  kpr.nextAtkAt = 0;
+  let px = 12.5;
+  const stride = () => { px += 8 * 0.05; moveTo(g, 'p1', [px, 0, 21.6]); };
+  for (let i = 0; i < 8; i++) { stride(); g.tick(0.05); } // server learns the velocity
+  assert.equal(kpr.snPhase, 'track');
+  while (kpr.snPhase === 'track') { stride(); g.tick(0.05); }
+  assert.ok(kpr.lockP[0] > px + 8 * S.lock * 0.5, 'the kill-point leads the walker');
+  msgs = [];
+  while (kpr.snPhase === 'lock') { stride(); g.tick(0.05); }
+  assert.equal(snipesAt()[0].m.hit, 'p1', 'unchanged momentum walks into the shot');
+
+  // a prey that slams the brakes at lock walks OUT of the led kill-point
+  kpr.nextAtkAt = 0;
+  for (let i = 0; i < 8; i++) { stride(); g.tick(0.05); }
+  while (kpr.snPhase === 'track') { stride(); g.tick(0.05); }
+  msgs = [];
+  while (kpr.snPhase === 'lock') { moveTo(g, 'p1', [px, 0, 21.6]); g.tick(0.05); } // freeze
+  assert.equal(snipesAt()[0].m.hit, null, 'braking inside the lock window dodges');
+  assert.ok(!msgs.some(x => x.m.t === 'hurt' && x.m.src === 'snipe'), 'no snipe damage on the miss');
+
+  // hard cover: a pillar between muzzle and kill-point eats the shot
+  const pil = ARENA.pillars[0];
+  const pd = Math.hypot(pil.p[0], pil.p[2]);
+  const pu = [pil.p[0] / pd, pil.p[2] / pd];
+  moveTo(g, 'p1', [pil.p[0] + pu[0] * 5, 0, pil.p[2] + pu[1] * 5]); // behind the pillar
+  kpr.pos = [pil.p[0] - pu[0] * 8, 0, pil.p[2] - pu[1] * 8];        // muzzle on the far side
+  kpr.nextAtkAt = 0; kpr.snPhase = null; kpr.snUntil = 0;
+  msgs = [];
+  advance(g, S.track + S.lock + 0.3);
+  assert.equal(snipesAt()[0].m.hit, null, 'the pillar eats the shot');
+  ok('keeper snipers: rooted track, momentum-led lock, brake dodge, pillar cover');
+}
+
 // ---------- end-of-encounter scoreboard ----------
 {
   const g = mkGame();

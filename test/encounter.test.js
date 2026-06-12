@@ -173,11 +173,12 @@ const slay = (g, id) => { while (g.enemies.has(id)) g.onMessage('p1', { t: 'hit'
   slay(g, twins[0].id);
   assert.equal(keepersOf(g).length, 1, 'no herald while the twin still walks');
   for (const i of [6, 7, 8]) g.onMessage('p1', { t: 'sigil', i });
-  assert.equal(g.enc.stage, 'HUNT', 'both ciphers answered — the lattice goes dark');
+  assert.equal(g.enc.stage, 'KEEPERS', 'the panel stays in the sky while its last strike converges');
   g.onMessage('p1', { t: 'sigil', i: 0 });
   assert.equal(sig.grid, 0, 'the spent lattice ignores fire');
   advance(g, ENC.sigil.strikeDelay + 0.2);
   assert.equal(twins[1].shielded, false, 'the second strike breaks ward B');
+  assert.equal(g.enc.stage, 'HUNT', 'the lattice retires only once the laser lands');
   slay(g, twins[1].id);
 
   // the last keeper rises warded into the sky; only its color's lock grounds it
@@ -369,10 +370,11 @@ const slay = (g, id) => { while (g.enemies.has(id)) g.onMessage('p1', { t: 'hit'
   assert.ok(twins.every(k => k.shielded), 'wards hold until their strikes land');
   for (const i of [0, 3, 6]) g.onMessage('p1', { t: 'sigil', i });
   assert.deepEqual(sig.matched, [true, true], 'code A accepted second');
-  assert.equal(g.enc.stage, 'HUNT', 'lattice retires once both ciphers land');
+  assert.equal(g.enc.stage, 'KEEPERS', 'lattice stands until its strikes discharge');
   // both strikes resolve; the twins stand at far-apart gates, so neither
   // blast reaches the other, freshly unwarded keeper
   advance(g, ENC.sigil.strikeDelay + 0.3);
+  assert.equal(g.enc.stage, 'HUNT', 'lattice retires once both strikes land');
   assert.ok(twins.every(k => !k.shielded), 'both lattice strikes land');
   assert.ok(twins.every(k => g.enemies.has(k.id)), 'both keepers survive their own ward-breaks');
   ok('sigil codes accepted in either order, junk rejected');
@@ -417,10 +419,11 @@ const slay = (g, id) => { while (g.enemies.has(id)) g.onMessage('p1', { t: 'hit'
   sig.codes = [maskOf([0, 1]), maskOf([7, 8])];
   for (const i of [0, 1]) g.onMessage('p1', { t: 'sigil', i });
   for (const i of [7, 8]) g.onMessage('p1', { t: 'sigil', i });
-  assert.equal(g.enc.stage, 'HUNT');
+  assert.equal(g.enc.stage, 'KEEPERS', 'the panel lingers through its final discharge');
   msgs = [];
   advance(g, ENC.sigil.grabCd * 2 + 1);
   assert.ok(!msgs.some(x => x.m.t === 'latticeGrab'), 'a spent lattice is left alone');
+  assert.equal(g.enc.stage, 'HUNT');
 
   // sampled swings: continuous (each grab starts where the last parked),
   // clamped, and centered near the quarter-turn mean

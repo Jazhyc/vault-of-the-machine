@@ -141,7 +141,10 @@ are guaranteed distinct and match order-free. Two warded Keepers spawn (`e.shiel
 a **lattice strike** (`enc.strikes` → `fireStrikes`): the ward breaks at the blast, which also
 one-shots UNwarded enemies within `strikeR` (the struck keeper itself is excluded — its ward
 soaked it). `sigilMatch` carries `code`+`kid` so the client FX and the server blast share the
-same `strikeDelay` clock. While stage is `KEEPERS` the boss periodically **grabs the panel** and
+same `strikeDelay` clock. The `KEEPERS → HUNT` flip waits for the SECOND strike to land
+(`fireStrikes`, not the match itself) — the stage change is what hides the panel client-side,
+and it must stay in the sky while it channels the laser; during that window the spent lattice
+ignores `sigil` toggles and panel-grabs. While stage is `KEEPERS` the boss periodically **grabs the panel** and
 hurls it around the 55 m sky-ring (`fireGrab`; tuning + design rationale commented in
 `ENC.sigil`): position is cosmetic to the server, so the `latticeGrab {at, dur, seed, a0, a1}`
 broadcast lets every client replay the identical seeded arc off server time (`world.update`;

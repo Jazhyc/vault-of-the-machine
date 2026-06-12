@@ -443,6 +443,7 @@ export class Game {
   onSigil(p, m) {
     const e = this.enc, sig = e.sigil;
     if (!this.alive(p) || e.st !== 'MECH' || e.stage !== 'KEEPERS' || !sig) return;
+    if (sig.matched[0] && sig.matched[1]) return; // spent — dark while the last strike converges
     const i = Number(m.i);
     if (!Number.isInteger(i) || i < 0 || i > 8) return;
     sig.grid ^= 1 << i;
@@ -459,10 +460,9 @@ export class Game {
         t: 'sigilMatch', slot, color: sig.colors[slot],
         code: sig.codes[slot], kid: e.keeperIds[slot],
       });
-      if (sig.matched[0] && sig.matched[1]) {
-        e.stage = 'HUNT';
-        this.toast('The lattice falls dark.', 'info');
-      }
+      // both ciphers answered → HUNT, but only once the last strike lands
+      // (fireStrikes) — flipping the stage hides the panel on every client,
+      // and it must stay in the sky while it channels the laser
       break;
     }
   }
@@ -487,6 +487,14 @@ export class Game {
         en.hp -= ENC.sigil.strikeDmg;
         if (en.hp <= 0) this.killEnemy(en, null);
       }
+    }
+    // the second cipher's strike has landed: NOW the lattice retires (the
+    // stage flip is what hides the panel client-side, so it waits for the
+    // laser; stage check keeps a splash-kill's FINAL from being clobbered)
+    const sig = e.sigil;
+    if (e.stage === 'KEEPERS' && sig && sig.matched[0] && sig.matched[1] && !e.strikes.length) {
+      e.stage = 'HUNT';
+      this.toast('The lattice falls dark.', 'info');
     }
   }
 
@@ -1372,8 +1380,10 @@ export class Game {
           if (!e.stage && this.t >= e.nextKeeperAt) this.spawnKeepers();
         }
         if (e.strikes.length) this.fireStrikes();
-        // the boss harasses the live lattice — hidden panels are left alone
-        if (e.stage === 'KEEPERS' && this.t >= e.nextGrabAt) this.fireGrab();
+        // the boss harasses the live lattice — hidden and spent panels are
+        // left alone (a fully-matched lattice is only discharging its strike)
+        if (e.stage === 'KEEPERS' && !(e.sigil.matched[0] && e.sigil.matched[1])
+          && this.t >= e.nextGrabAt) this.fireGrab();
         // standing in the herald's lock circle kindles the wardbreaker blessing
         // (a timed buff — only blessed fire can wound the herald's ward)
         if (e.stage === 'FINAL') {

@@ -116,12 +116,16 @@ const rprojMat = (color) => {
   if (!rprojMats.has(color)) rprojMats.set(color, new THREE.MeshBasicMaterial({ color }));
   return rprojMats.get(color);
 };
-function spawnRemoteProj(from, dir, speed, color, { big = false, grav = false } = {}) {
+function spawnRemoteProj(from, dir, speed, color, { big = false, grav = false, wolves = false } = {}) {
   const mesh = new THREE.Mesh(big ? RPROJ_GEO_BIG : RPROJ_GEO, rprojMat(color));
   mesh.raycast = () => {};
   mesh.position.copy(from);
   scene.add(mesh);
-  remoteProjs.push({ mesh, vel: dir.multiplyScalar(speed), ttl: 2.5, grav });
+  const p = { mesh, vel: dir.multiplyScalar(speed), ttl: 2.5, grav };
+  // a remote Gjallarhorn orb releases cosmetic wolfpack missiles on the real
+  // orb's cadence (mirrors fireGjally/tick in weapons.js)
+  if (wolves) { p.wolfLeft = WEAPONS.gjally.wolfMax; p.wolfT = 0.25; }
+  remoteProjs.push(p);
 }
 
 // Pre-warm the GPU: actually DRAW one of everything once — enemies, pickups,
@@ -555,14 +559,25 @@ net.on('pf', (m) => {
     const speed = m.w === 'rocket' ? 55 : m.w === 'gjally' ? WEAPONS.gjally.projSpeed : m.w === 'nova' ? SUPER.nova.speed : 22;
     const color = m.w === 'rocket' ? 0xffaa33 : m.w === 'gjally' ? 0x7dffb0 : m.w === 'nova' ? 0x9d4edd
       : (clsColorOf(m.id) ?? 0x7ae582);
-    spawnRemoteProj(from, dir, speed, color, { big: m.w === 'nova', grav: m.w === 'grenade' });
+    spawnRemoteProj(from, dir, speed, color, { big: m.w === 'nova', grav: m.w === 'grenade', wolves: m.w === 'gjally' });
     audio.shot(m.w === 'grenade' ? 'melee' : m.w === 'gjally' ? 'gjally' : 'rocket');
   }
 });
 
 net.on('explosion', (m) => {
-  effects.explosion(new THREE.Vector3(...m.p), m.kind, m.kind === 'grenade' ? clsColorOf(m.by) : null);
+  const p = new THREE.Vector3(...m.p);
+  effects.explosion(p, m.kind, m.kind === 'grenade' ? clsColorOf(m.by) : null);
   audio.explosion(m.kind === 'nova');
+  // The server excludes the thrower from this broadcast, so everyone here is a
+  // spectator: replay the blast's homing payload cosmetically (flight + boom
+  // only — the thrower's client flies the real, damage-dealing swarm).
+  if (!weapons) return;
+  if (m.kind === 'nova') weapons.spawnNovaSwarm(p, true);
+  else if (m.kind === 'grenade' && snap?.players.find(q => q.id === m.by)?.cls === 'gunslinger') {
+    weapons.spawnEmberSwarm(p, true);
+  } else if (m.kind === 'gjally') {
+    for (const rp of remoteProjs) rp.wolfLeft = 0; // the real orb detonated — stop the release
+  }
 });
 // voidcaller grenade orb: the server-owned DoT zone parks where the blast was
 net.on('voidOrb', (m) => effects.voidOrb(new THREE.Vector3(m.p[0], m.p[1], m.p[2]), m.r, m.dur));
@@ -910,6 +925,10 @@ function loop() {
 
   for (let i = remoteProjs.length - 1; i >= 0; i--) {
     const p = remoteProjs[i];
+    if (p.wolfLeft > 0 && weapons) {
+      p.wolfT -= dt;
+      if (p.wolfT <= 0) { p.wolfT = WEAPONS.gjally.wolfInterval; p.wolfLeft--; weapons.spawnWolf(p.mesh.position, true); }
+    }
     if (p.grav) p.vel.y -= 20 * dt;
     p.mesh.position.addScaledVector(p.vel, dt);
     p.ttl -= dt;

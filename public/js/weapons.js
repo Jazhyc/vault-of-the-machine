@@ -499,7 +499,7 @@ export class WeaponSystem {
     return new THREE.Vector3(p.x, p.y + 1.2, p.z);
   }
 
-  spawnWolf(fromPos) {
+  spawnWolf(fromPos, cosmetic = false) {
     const target = this.acquireWolfTarget(fromPos);
     const mesh = new THREE.Mesh(WOLF_GEO, WOLF_MAT); // shared: 18 wolves per shot must not allocate
     mesh.raycast = () => {};
@@ -508,7 +508,7 @@ export class WeaponSystem {
     const d = WEAPONS.gjally;
     const dir = new THREE.Vector3((Math.random() - 0.5), 0.7 + Math.random() * 0.5, (Math.random() - 0.5)).normalize();
     this.wolves.push({ pos: fromPos.clone(), vel: dir.multiplyScalar(d.wolfSpeed * 0.6), target, mesh,
-      life: 4, spd: d.wolfSpeed, dmg: d.wolfDmg, wkey: 'gjally', numKind: 'super' });
+      life: 4, spd: d.wolfSpeed, dmg: d.wolfDmg, wkey: 'gjally', numKind: 'super', cosmetic });
   }
 
   // Swarm payloads (gunslinger grenade embers, voidcaller nova shards): the
@@ -530,7 +530,7 @@ export class WeaponSystem {
     return out;
   }
 
-  spawnSwarm(fromPos, S, style) {
+  spawnSwarm(fromPos, S, style, cosmetic = false) {
     const targets = this.acquireSwarmTargets(fromPos, S.n);
     for (let i = 0; i < S.n; i++) {
       const mesh = new THREE.Mesh(WOLF_GEO, style.mat);
@@ -541,8 +541,21 @@ export class WeaponSystem {
       const a = (i / S.n) * Math.PI * 2;
       const dir = new THREE.Vector3(Math.cos(a) * 0.7, 1, Math.sin(a) * 0.7).normalize();
       this.wolves.push({ pos: fromPos.clone(), vel: dir.multiplyScalar(S.speed * 0.8), target: targets[i], mesh,
-        life: 4, spd: S.speed, dmg: S.dmg, wkey: style.wkey, numKind: style.numKind, boomCol: style.boomCol });
+        life: 4, spd: S.speed, dmg: S.dmg, wkey: style.wkey, numKind: style.numKind, boomCol: style.boomCol, cosmetic });
     }
+  }
+
+  // Named swarm payloads. main.js also calls these with cosmetic=true to replay
+  // ANOTHER guardian's swarm off the explosion broadcast: same flight and homing
+  // against this client's enemy views, but the thrower's client owns the damage.
+  spawnNovaSwarm(pos, cosmetic = false) {
+    this.spawnSwarm(pos, SUPER.nova.swarm,
+      { mat: NOVA_SWARM_MAT, wkey: 'nswarm', numKind: 'super', boomCol: 0x9d4edd }, cosmetic);
+  }
+
+  spawnEmberSwarm(pos, cosmetic = false) {
+    this.spawnSwarm(pos, GRENADE.gunslinger.swarm,
+      { mat: SWARM_MAT, wkey: 'gswarm', numKind: 'normal', boomCol: 0xffb703 }, cosmetic);
   }
 
   updateWolves(dt) {
@@ -559,12 +572,15 @@ export class WeaponSystem {
       w.mesh.position.copy(w.pos);
       const reached = tp && w.pos.distanceTo(tp) < (w.target.kind === 'boss' ? ENC.bossBodyR : 1.5);
       if (reached) {
-        let dmg = w.dmg * (this.golden() ? SUPER.golden.mul : 1);
-        dmg = Math.round(dmg);
-        this.ctx.net.hit(w.target.kind === 'boss' ? 'boss' : w.target.id, dmg, w.wkey);
-        this.ctx.effects.damageNumber(w.pos, dmg, this.golden() ? 'super' : w.numKind);
+        if (!w.cosmetic) { // cosmetic replays land boom-only — the thrower's
+          // client owns the hit, the damage number and the hit-confirm tick
+          let dmg = w.dmg * (this.golden() ? SUPER.golden.mul : 1);
+          dmg = Math.round(dmg);
+          this.ctx.net.hit(w.target.kind === 'boss' ? 'boss' : w.target.id, dmg, w.wkey);
+          this.ctx.effects.damageNumber(w.pos, dmg, this.golden() ? 'super' : w.numKind);
+          this.ctx.audio.hitTick(true);
+        }
         this.ctx.effects.explosion(w.pos, 'death', w.boomCol);
-        this.ctx.audio.hitTick(true);
       } else if (w.life > 0 && w.pos.y > 0) {
         continue;
       } else {
@@ -673,13 +689,11 @@ export class WeaponSystem {
     this.ctx.audio.explosion(kind === 'nova');
     this.predictAoeNumbers(p.pos, kind);
     if (kind === 'nova') {
-      this.spawnSwarm(p.pos, SUPER.nova.swarm,
-        { mat: NOVA_SWARM_MAT, wkey: 'nswarm', numKind: 'super', boomCol: 0x9d4edd });
+      this.spawnNovaSwarm(p.pos);
     }
     if (kind === 'grenade') {
       const cls = this.clsKey();
-      if (cls === 'gunslinger') this.spawnSwarm(p.pos, GRENADE.gunslinger.swarm,
-        { mat: SWARM_MAT, wkey: 'gswarm', numKind: 'normal', boomCol: 0xffb703 });
+      if (cls === 'gunslinger') this.spawnEmberSwarm(p.pos);
       // the orb visual arrives via the server's voidOrb broadcast; this list
       // only mirrors the 0.5s gnaw ticks as predicted damage numbers
       if (cls === 'voidcaller') {

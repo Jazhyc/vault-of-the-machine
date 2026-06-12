@@ -52,7 +52,15 @@ nova, swarm shards) — going down must not void it mid-flight (regression-teste
 damage path needs a cap or validation server-side, and ideally a test like the existing
 "anti-cheat caps & nova gating" block. The Nova detonation also looses 20 thrower-client homing
 shards (`SUPER.nova.swarm`, the wolfpack/swarm machinery in weapons.js) landing as ordinary
-capped `nswarm` hits — the budget rationale is commented on `SUPER.nova`. Damage falloff is client-side: a weapon with
+capped `nswarm` hits — the budget rationale is commented on `SUPER.nova`. All homing payloads
+(nova shards, gunslinger embers, gjally wolfpack) fly only on the thrower's client; every OTHER
+client replays them **cosmetically** (`cosmetic` flag through the wolf machinery — same flight
+and homing against that client's enemy views, boom on arrival, but no `hit`, no damage numbers,
+no hit-tick): shards/embers spawn off the `explosion` broadcast (the server excludes the
+thrower, so the handler only ever runs on spectators), gjally wolves release from the remote
+`pf` orb on the real cadence and halt when the gjally `explosion` lands. Targets are acquired
+per-client, so flight lines can differ per screen — damage stays thrower-authoritative.
+Damage falloff is client-side: a weapon with
 `WEAPONS[k].falloff {start, min}` (currently shotgun only) scales hitscan damage in `fireHitscan`
 from full inside `start` m linearly down to `min`× at `range`; its `DMG_CAPS` entry covers the
 point-blank maximum.

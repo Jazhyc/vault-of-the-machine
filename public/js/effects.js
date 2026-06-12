@@ -3,6 +3,35 @@ import { SUPER } from '/shared/constants.js';
 
 const noRay = (o) => { o.raycast = () => {}; return o; };
 
+// Spiral ribbon (two arms, two turns) for the voidcaller vortex disc, wound
+// from the rim down into the core. Vertex colors ramp black→bright along the
+// arm: with additive blending black is invisible, so the tail fades out for
+// free (no per-vertex-opacity shader needed).
+function vortexDiscGeo() {
+  const steps = 64, turns = 2;
+  const pos = [], col = [], idx = [];
+  for (let arm = 0; arm < 2; arm++) {
+    const a0 = arm * Math.PI, base = (steps + 1) * 2 * arm;
+    for (let i = 0; i <= steps; i++) {
+      const k = i / steps;                      // 0 rim → 1 core
+      const a = a0 + k * turns * 2 * Math.PI;
+      const rad = 0.95 - 0.8 * k;
+      const half = 0.16 * (1 - 0.45 * k);       // the arm thins as it falls in
+      const dip = -0.22 * k;                    // funnel toward the singularity
+      pos.push(Math.cos(a) * (rad + half), dip, Math.sin(a) * (rad + half),
+               Math.cos(a) * (rad - half), dip, Math.sin(a) * (rad - half));
+      const b = 0.1 + 0.9 * k * k;              // bright at the core, dark tail
+      col.push(b, b, b, b, b, b);
+      if (i < steps) { const o = base + i * 2; idx.push(o, o + 1, o + 2, o + 1, o + 3, o + 2); }
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  g.setIndex(idx);
+  return g;
+}
+
 function numberSprite() {
   const c = document.createElement('canvas');
   c.width = 192; c.height = 80;
@@ -54,16 +83,40 @@ export class Effects {
     });
     this.tracerIdx = 0;
 
-    // Voidcaller grenade orbs: a lingering void sphere per orb. Tiny pool (one
-    // per voidcaller every ~18s, 6s life); material cloned per slot because the
-    // opacity animates. No lights — the standing light-count rule applies.
+    // Voidcaller grenade vortices: a dark singularity core, two spiral
+    // accretion discs (shared vortexDiscGeo, tilted sibling sells the volume),
+    // six infalling motes, and a faint shell that keeps the DoT radius
+    // readable. Tiny pool (one per voidcaller every ~18s, 6s life); materials
+    // cloned per slot because opacity animates (the two discs of a slot share
+    // one). No lights — the standing light-count rule applies.
+    const voidShellGeo = new THREE.SphereGeometry(1, 18, 14);
+    const voidCoreGeo = new THREE.SphereGeometry(0.16, 12, 10);
+    const voidDiscGeo = vortexDiscGeo();
+    const voidMoteGeo = new THREE.SphereGeometry(0.045, 6, 6);
     this.voids = Array.from({ length: 4 }, () => {
-      const mesh = noRay(new THREE.Mesh(new THREE.SphereGeometry(1, 18, 14),
-        new THREE.MeshBasicMaterial({ color: 0x9d4edd, transparent: true, opacity: 0.3, depthWrite: false })));
-      mesh.visible = false;
-      mesh.frustumCulled = false;
-      scene.add(mesh);
-      return { mesh, life: 0, dur: 1, r: 1 };
+      const group = new THREE.Group();
+      const shell = noRay(new THREE.Mesh(voidShellGeo,
+        new THREE.MeshBasicMaterial({ color: 0x9d4edd, transparent: true, opacity: 0.1, depthWrite: false })));
+      const core = noRay(new THREE.Mesh(voidCoreGeo,
+        new THREE.MeshBasicMaterial({ color: 0x140523, transparent: true, opacity: 0.95, depthWrite: false })));
+      const discMat = new THREE.MeshBasicMaterial({
+        color: 0xb06bff, transparent: true, opacity: 0.6, depthWrite: false,
+        blending: THREE.AdditiveBlending, side: THREE.DoubleSide, vertexColors: true,
+      });
+      const disc = noRay(new THREE.Mesh(voidDiscGeo, discMat));
+      const disc2 = noRay(new THREE.Mesh(voidDiscGeo, discMat));
+      disc2.rotation.x = 0.5; // default XYZ euler order: per-frame Y spin stays in-plane under the tilt
+      disc2.scale.setScalar(0.75);
+      const moteMat = new THREE.MeshBasicMaterial({
+        color: 0xd9b8ff, transparent: true, opacity: 0.85, depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      });
+      const motes = Array.from({ length: 6 }, () => noRay(new THREE.Mesh(voidMoteGeo, moteMat)));
+      group.add(shell, core, disc, disc2, ...motes);
+      group.visible = false;
+      group.traverse((o) => { o.frustumCulled = false; });
+      scene.add(group);
+      return { group, shell, core, disc, disc2, motes, moteMat, life: 0, dur: 1, r: 1 };
     });
     this.voidIdx = 0;
 
@@ -172,7 +225,7 @@ export class Effects {
     for (const b of this.booms) { b.mesh.visible = true; b.life = 0.0001; b.max = 1; b.r = 1; b.lit = false; }
     for (const t of this.tracers) { t.line.visible = true; t.life = 0.0001; }
     for (const s of this.sparks) { s.mesh.visible = true; s.life = 0.0001; }
-    for (const v of this.voids) { v.mesh.visible = true; v.life = 0.0001; v.dur = 1; v.r = 1; }
+    for (const v of this.voids) { v.group.visible = true; v.life = 0.0001; v.dur = 1; v.r = 1; }
     for (const f of this.flares) { f.pillar.visible = f.ring.visible = true; f.life = 0.0001; f.dur = 1; f.apex = 0.5; }
   }
 
@@ -199,12 +252,12 @@ export class Effects {
     this.shake(big ? 0.5 : kind === 'death' || kind === 'heal' ? 0.08 : 0.25);
   }
 
-  // A voidcaller grenade orb parks at the blast for `dur` seconds.
+  // A voidcaller grenade vortex parks at the blast for `dur` seconds.
   voidOrb(pos, r, dur) {
     const v = this.voids[this.voidIdx++ % this.voids.length];
-    v.mesh.position.copy(pos);
+    v.group.position.copy(pos);
     v.r = r; v.dur = dur; v.life = dur;
-    v.mesh.visible = true;
+    v.group.visible = true;
   }
 
   tracer(from, to) {
@@ -278,9 +331,22 @@ export class Effects {
       v.life -= dt;
       const t = v.dur - v.life;
       const fade = Math.min(1, v.life / 0.5) * Math.min(1, t / 0.25); // ease in, ease out
-      v.mesh.scale.setScalar(v.r * (0.92 + 0.08 * Math.sin(t * 7)));
-      v.mesh.material.opacity = 0.32 * fade;
-      if (v.life <= 0) v.mesh.visible = false;
+      v.group.scale.setScalar(v.r * (0.95 + 0.05 * Math.sin(t * 7)));
+      v.disc.rotation.y = -t * 2.4;
+      v.disc2.rotation.y = -t * 3.7; // same direction, faster — reads as depth
+      v.shell.material.opacity = 0.1 * fade;
+      v.core.material.opacity = 0.95 * fade;
+      v.disc.material.opacity = 0.6 * fade;
+      v.moteMat.opacity = 0.85 * fade;
+      for (let j = 0; j < v.motes.length; j++) {
+        const u = (t * 0.45 + j / v.motes.length) % 1; // staggered infall progress
+        const a = j * 2.4 - t * 2.4 - u * 4;           // spirals in with the disc
+        const rad = 0.95 - 0.8 * u;
+        v.motes[j].position.set(Math.cos(a) * rad,
+          0.3 * Math.sin(j * 1.7 + t * 1.1) * (1 - u) - 0.22 * u, Math.sin(a) * rad);
+        v.motes[j].scale.setScalar(1 - 0.55 * u);
+      }
+      if (v.life <= 0) v.group.visible = false;
     }
     for (const f of this.flares) {
       if (f.life <= 0) continue;

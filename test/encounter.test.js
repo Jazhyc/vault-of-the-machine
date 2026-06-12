@@ -1779,6 +1779,61 @@ const slay = (g, id) => { while (g.enemies.has(id)) g.onMessage('p1', { t: 'hit'
   ok('echo class brains: pack nova, hoarded golden, boss burn');
 }
 
+// ---------- echo sentinels: the obliteration save ----------
+// Regression: a damage-phase anchor dome expiring mid-warning used to count
+// as cover, and both titans could dump their supers as anchors, leaving the
+// blast unanswered. The squad's LAST titan super is reserved for the save.
+{
+  const g = mkGame();
+  g.addPlayer('p1', 'Survivor', 'gunslinger');
+  moveTo(g, 'p1', ENC.banner.pos);
+  g.onMessage('p1', { t: 'interact' });
+  for (const s of [...g.bots.signs.values()]) {
+    if (s.cls !== 'sentinel') continue;
+    moveTo(g, 'p1', s.p);
+    g.onMessage('p1', { t: 'interact' });
+  }
+  const titans = [...g.players.values()].filter(p => p.bot);
+  assert.equal(titans.length, 2);
+  moveTo(g, 'p1', [0, 0, 1]);
+  for (let i = 0; i < 400 && g.enc.st === 'LOBBY'; i++) g.tick(0.05);
+  assert.equal(g.enc.st, 'MECH');
+  god(g);
+  Object.assign(g.enc, {
+    nextWaveAt: g.t + 999, nextKeeperAt: g.t + 999, nextSeekerAt: g.t + 999, nextSpecialAt: g.t + 999,
+  });
+  g.clearAdds();
+
+  // only ONE titan super is up: it must ride through the whole damage phase
+  // untouched (no anchor dome), reserved for the obliteration that follows —
+  // the save itself may fire the instant OBLIT opens (the titan pre-positions
+  // on the fireteam through the phase's last seconds), so assert the reserve
+  // only while DAMAGE is actually running
+  titans[0].sup = 100;
+  titans[1].sup = 0;
+  msgs = [];
+  g.enterDamage();
+  moveTo(g, 'p1', [22, 0, 8]); // the guardian holds a spot; the dome must come HERE
+  while (g.enc.st === 'DAMAGE') {
+    assert.ok(!msgs.some(x => x.m.t === 'super' && x.m.kind === 'ward'),
+      'the last titan super is reserved while obliteration looms');
+    advance(g, 0.25);
+  }
+  assert.equal(g.enc.st, 'OBLIT');
+
+  // mortal again for the blast itself — the dome must do the sheltering
+  g.projs.clear();
+  g.clearAdds(); // no stray seekers cooking the de-godded survivor
+  const p1 = g.players.get('p1');
+  p1.hp = PLAYER.maxHp;
+  advance(g, ENC.oblitWarn + 0.3);
+  assert.ok(msgs.some(x => x.m.t === 'super' && x.m.kind === 'ward'),
+    'the reserved dome answers the blast');
+  assert.equal(g.enc.st, 'MECH', 'the round turns over');
+  assert.ok(!p1.downed && p1.hp > 0, 'the guardian survives obliteration inside the echo dome');
+  ok('echo sentinels: last super reserved for the obliteration save, planted on the fireteam');
+}
+
 // ---------- echo guardians: idle escort (no statues between waves) ----------
 {
   const g = mkGame();

@@ -213,8 +213,14 @@ Class brains + squad blackboard: golden is hoarded and cast the moment the boss 
 (`onBossExposed` — fired on DAMAGE entry AND the FINAL surge collapse); novas answer a
 ≥`novaAdds` cluster or the bare boss, staggered between warlocks (`board.novaAt`); sentinels
 keep ONE ward dome fireteam-wide (checked against live `wells`), dome a claimed revive, and
-emergency-dome OBLIT when no well was woken (any well kind shelters the blast). Revives are
-claim-based (`board.revive`, sentinels favored) so bots never dogpile one body. Movement is
+anchor the burn phases — but the squad's LAST ready titan super is RESERVED for the
+obliteration save whenever an OBLIT can still come and no refuge stands woken (`spendable` in
+`wardLogic`; both titans dumping anchors into one damage phase once left the wipe unanswered).
+The save itself only trusts shelter that SURVIVES the blast (`w.until > e.ends` — an anchor
+dome expiring mid-warning is no cover), pre-positions the titan on the nearest human through
+the damage phase's last seconds, and emergency-casts in place only when time truly runs out
+(the dome exists the instant the cast validates). Revives are claim-based (`board.revive`,
+sentinels favored) so bots never dogpile one body. Movement is
 server-written pos/vel — `leadAim` and sniper locks work against bots — with server-written hop
 arcs like the husk pounce: pillar-shadow sweep cover, timed beam jumps once `pillarsDown`,
 sniper-lock braking, seeker sprint-aways, lateral husk kiting, slam-radius avoidance, banner

@@ -225,17 +225,29 @@ export class BotManager {
     const g = this.game, p = b.p, e = g.enc;
     // mid-revive channel: hold your ground
     if (p.revive) return { d: [0, 0] };
-    // OBLIT shelter beats everything — the downed survive the blast anyway
+    // OBLIT shelter beats everything — the downed survive the blast anyway.
+    // Only shelter that will SURVIVE the blast counts (a dome expiring
+    // mid-warning sheltered nobody once).
     if (e.st === 'OBLIT') {
-      const w = this.nearestWell(p);
+      let w = null, wd = Infinity;
+      for (const well of g.wells.values()) {
+        if (well.until < e.ends + 0.2) continue;
+        const d = dxz(p.pos, well.p);
+        if (d < wd) { wd = d; w = well; }
+      }
       if (w) {
         if (dxz(p.pos, w.p) > w.r - 1.2) return this.seek(b, w.p, true);
         return { d: [0, 0] };
       }
-      // no well anywhere: a sentinel's dome shelters obliteration (see
-      // wardLogic) — gather on the titan who can raise one
+      // no lasting well: a sentinel's dome shelters obliteration (wardLogic).
+      // The save-titan plants itself ON the fireteam; everyone else gathers.
       const titan = this.wardTitan();
-      if (titan && titan !== p && dxz(p.pos, titan.pos) > 2.5) return this.seek(b, titan.pos, true);
+      if (titan === p) {
+        const h = this.nearestHuman(p);
+        if (h && dxz(p.pos, h.pos) > 3) return this.seek(b, h.pos, true);
+        return { d: [0, 0] };
+      }
+      if (titan && dxz(p.pos, titan.pos) > 2.5) return this.seek(b, titan.pos, true);
       return { d: [0, 0] };
     }
     // claimed revive: close in, then start the channel
@@ -249,6 +261,15 @@ export class BotManager {
     }
     if (e.st === 'LOBBY') return this.lobbyMove(b);
     if (e.st === 'VICTORY') return this.loiter(b, [0, 0, 6], 4);
+    // the save-titan pre-positions: a damage phase running out with no refuge
+    // woken means the dome is about to be the only shelter — be standing ON
+    // the fireteam before the warning even hits
+    if (e.st === 'DAMAGE' && e.ends - g.t < 3.5 && p === this.wardTitan()
+      && ![...g.wells.values()].some(w => w.kind === 'refuge')) {
+      const h = this.nearestHuman(p);
+      if (h && dxz(p.pos, h.pos) > 3) return this.seek(b, h.pos, true);
+      return { d: [0, 0] };
+    }
     // sweep: stone shadows while pillars stand, timed hops once they're dust
     if (e.sweep) {
       if (!e.pillarsDown) {
@@ -303,15 +324,6 @@ export class BotManager {
 
   seek(b, point, sprint) {
     return { d: [point[0] - b.p.pos[0], point[2] - b.p.pos[2]], sprint };
-  }
-
-  nearestWell(p) {
-    let best = null, bd = Infinity;
-    for (const w of this.game.wells.values()) {
-      const d = dxz(p.pos, w.p);
-      if (d < bd) { bd = d; best = w; }
-    }
-    return best;
   }
 
   // an alive sentinel echo holding a ready super (the emergency dome)
@@ -427,14 +439,9 @@ export class BotManager {
   // behind), then wander loosely around them — the slam-radius shove and the
   // body-separation pass keep the huddle honest.
   followVec(b) {
-    const g = this.game, p = b.p;
-    let anchor = null, ad = Infinity;
-    for (const q of g.players.values()) {
-      if (q.bot || !g.alive(q)) continue;
-      const d = dxz(p.pos, q.pos);
-      if (d < ad) { ad = d; anchor = q; }
-    }
+    const anchor = this.nearestHuman(b.p);
     if (!anchor) return { d: [0, 0] };
+    const ad = dxz(b.p.pos, anchor.pos);
     if (ad > 24) return this.seek(b, anchor.pos, true);
     if (ad > 8) return this.seek(b, anchor.pos, false);
     return this.loiter(b, anchor.pos, 5);
@@ -763,20 +770,62 @@ export class BotManager {
 
   wardLogic(b) {
     const g = this.game, p = b.p, e = g.enc, t = g.t;
+    // (b) the OBLITERATION save — highest-value dome in the game, judged
+    // against shelter that will actually SURVIVE the blast: a dome expiring
+    // mid-warning is no cover (this exact wipe shipped once).
+    if (e.st === 'OBLIT') {
+      for (const w of g.wells.values()) if (w.until > e.ends + 0.2) return;
+      // a key still in play may wake a real refuge — hold to the last window;
+      // otherwise cast as soon as we're standing among the living (movement
+      // walks the save-titan to the nearest human first)
+      const keyLive = g.keys.size > 0 || [...g.players.values()].some(q => q.hasKey);
+      const h = this.nearestHuman(p);
+      const settled = !h || dxz(p.pos, h.pos) < 4.5;
+      // the dome exists the instant the cast validates, so the true deadline
+      // is nearly the blast itself — keep running toward the fireteam and
+      // only emergency-cast in place when time actually runs out
+      if ((settled && !keyLive) || e.ends - t < 0.9) return this.cast(b, null);
+      return;
+    }
     // ONE dome at a time, fireteam-wide — the second titan holds its super
     for (const w of g.wells.values()) if (w.kind === 'ward') return;
+    // RESERVE RULE: while an obliteration can still come (any phase before
+    // FINAL) and no refuge stands woken, the squad's LAST ready titan super
+    // belongs to the save — anchors and revive domes spend only the surplus.
+    // (Both titans dumping anchors into one damage phase left the wipe
+    // unanswered once.)
+    const spendable = e.st === 'FINAL'
+      || [...g.wells.values()].some(w => w.kind === 'refuge')
+      || this.othersHoldWard(b);
+    if (!spendable) return;
     // (a) shield the revive I'm channeling
     const claim = this.myClaim(b);
     if (claim && dxz(p.pos, claim.pos) < PLAYER.reviveRange) return this.cast(b, claim.pos);
-    // (b) obliteration with no woken refuge: the dome IS the refuge
-    // (wells of any kind shelter the blast — see fireOblit/inWell)
-    if (e.st === 'OBLIT' && g.wells.size === 0 && e.ends - t < 2.6) return this.cast(b, null);
-    // (c) damage-phase anchor: shelter the gathered fireteam
-    if (e.st === 'DAMAGE' && t >= b.wardPlanAt) {
+    // (c) burn-phase anchor: shelter the gathered fireteam (DAMAGE, and the
+    // true final stand once the generator is down — there is no oblit after)
+    if ((e.st === 'DAMAGE' || (e.st === 'FINAL' && !e.shield)) && t >= b.wardPlanAt) {
       let near = 0;
       for (const q of g.players.values()) if (q !== p && g.alive(q) && dxz(p.pos, q.pos) < 8) near++;
       if (near >= 1) return this.cast(b, null);
     }
+  }
+
+  // another living sentinel echo still holding a ready super
+  othersHoldWard(b) {
+    for (const ob of this.brains.values()) {
+      if (ob !== b && ob.p.cls === 'sentinel' && this.game.alive(ob.p) && ob.p.sup >= 99) return true;
+    }
+    return false;
+  }
+
+  nearestHuman(p) {
+    let best = null, bd = Infinity;
+    for (const q of this.game.players.values()) {
+      if (q.bot || !this.game.alive(q)) continue;
+      const d = dxz(p.pos, q.pos);
+      if (d < bd) { bd = d; best = q; }
+    }
+    return best;
   }
 
   // golden/ward: the server effect is instant in onSuperCast; dir only flavors FX

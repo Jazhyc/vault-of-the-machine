@@ -1,29 +1,42 @@
 // Snapshot-driven world entities: remote players, server projectiles,
 // ammo bricks, capsules, keys, wells, the victory chest.
 import * as THREE from 'three';
-import { CLASSES, ENC } from '/shared/constants.js';
+import { CLASSES, ENC, BOTS } from '/shared/constants.js';
 import { Interp } from './enemies.js';
 
 const noRay = (o) => { o.raycast = () => {}; return o; };
 
+// Tag materials are cached per name+color: the same label repeats across a
+// soul-sign, the summoned echo's head, and rebuilds — and each cache miss is
+// a canvas raster + a GPU texture upload, which must never land mid-session
+// in a burst (the banner plant spawns five sign tags in ONE frame). The echo
+// roster's tags are pre-painted at boot in buildEntityWarmup.
+const tagMats = new Map(); // `${name}|${color}` -> SpriteMaterial
+function tagMaterial(name, color) {
+  const key = `${name}|${color}`;
+  if (!tagMats.has(key)) {
+    // The lobby showcase puts this sprite a few meters from the camera, where it
+    // spans most of the screen — raster it large enough for that, not just for
+    // in-arena distances (256px across 3.4 m read visibly blurry up close).
+    const c = document.createElement('canvas');
+    c.width = 1024; c.height = 192;
+    const g = c.getContext('2d');
+    g.font = '600 104px "Segoe UI", Arial';
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    g.fillStyle = color;
+    g.strokeStyle = 'rgba(0,0,0,0.85)';
+    g.lineWidth = 10;
+    g.lineJoin = 'round';
+    const label = name.toUpperCase();
+    g.strokeText(label, 512, 104, 960);
+    g.fillText(label, 512, 104, 960);
+    tagMats.set(key, new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), depthTest: false, transparent: true }));
+  }
+  return tagMats.get(key);
+}
 function makeNameTag(name, color) {
-  // The lobby showcase puts this sprite a few meters from the camera, where it
-  // spans most of the screen — raster it large enough for that, not just for
-  // in-arena distances (256px across 3.4 m read visibly blurry up close).
-  const c = document.createElement('canvas');
-  c.width = 1024; c.height = 192;
-  const g = c.getContext('2d');
-  g.font = '600 104px "Segoe UI", Arial';
-  g.textAlign = 'center';
-  g.textBaseline = 'middle';
-  g.fillStyle = color;
-  g.strokeStyle = 'rgba(0,0,0,0.85)';
-  g.lineWidth = 10;
-  g.lineJoin = 'round';
-  const label = name.toUpperCase();
-  g.strokeText(label, 512, 104, 960);
-  g.fillText(label, 512, 104, 960);
-  const spr = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), depthTest: false, transparent: true }));
+  const spr = new THREE.Sprite(tagMaterial(name, color));
   spr.scale.set(3.4, 0.64, 1);
   return noRay(spr);
 }
@@ -46,17 +59,25 @@ const G_GEO = {
 };
 const G_SUIT_MAT = new THREE.MeshStandardMaterial({ color: 0x14151d, roughness: 0.45, metalness: 0.55 });
 const G_HEAD_MAT = new THREE.MeshStandardMaterial({ color: 0x101018, roughness: 0.3, metalness: 0.6 });
+// Echo (bot) guardians wear a translucent pale-gold shell — summoned-phantom
+// read at a glance. Shared module singletons like every other guardian
+// material (class accents stay per-guardian as usual).
+const G_SUIT_PHANTOM = new THREE.MeshStandardMaterial({ color: 0x2e2a1c, roughness: 0.4, metalness: 0.6,
+  transparent: true, opacity: 0.78, emissive: 0xc8a84b, emissiveIntensity: 0.22 });
+const G_HEAD_PHANTOM = new THREE.MeshStandardMaterial({ color: 0x262214, roughness: 0.3, metalness: 0.6,
+  transparent: true, opacity: 0.85, emissive: 0xc8a84b, emissiveIntensity: 0.18 });
 const G_KEY_MAT = new THREE.MeshBasicMaterial({ color: 0xffd34d });
 const G_BEACON_MAT = new THREE.MeshBasicMaterial({ color: 0x7ae582, transparent: true, opacity: 0.35,
   side: THREE.DoubleSide, depthWrite: false }); // cloned per guardian (opacity pulses while downed)
 
-export function buildGuardian(name, cls) {
+export function buildGuardian(name, cls, phantom = false) {
   const col = new THREE.Color(CLASSES[cls]?.color || '#ffffff');
   const g = new THREE.Group();
   const lightLine = new THREE.MeshBasicMaterial({ color: col }); // Tron accent, class-colored
-  const body = noRay(new THREE.Mesh(G_GEO.body, G_SUIT_MAT));
+  const suitMat = phantom ? G_SUIT_PHANTOM : G_SUIT_MAT;
+  const body = noRay(new THREE.Mesh(G_GEO.body, suitMat));
   body.position.y = 1.1;
-  const head = noRay(new THREE.Mesh(G_GEO.head, G_HEAD_MAT));
+  const head = noRay(new THREE.Mesh(G_GEO.head, phantom ? G_HEAD_PHANTOM : G_HEAD_MAT));
   head.position.y = 1.95;
   const visor = noRay(new THREE.Mesh(G_GEO.visor, lightLine));
   visor.position.set(0, 1.95, 0.2);
@@ -75,7 +96,7 @@ export function buildGuardian(name, cls) {
   studR.position.x = 0.46;
   const crest = noRay(new THREE.Mesh(G_GEO.crest, lightLine));
   crest.position.set(0, 2.16, 0);
-  const gun = noRay(new THREE.Mesh(G_GEO.gun, G_SUIT_MAT));
+  const gun = noRay(new THREE.Mesh(G_GEO.gun, suitMat));
   gun.position.set(0.3, 1.4, 0.5);
   // auric key marker — everyone can see who holds the well key
   const key = noRay(new THREE.Mesh(G_GEO.key, G_KEY_MAT));
@@ -193,6 +214,20 @@ const BANNER_TOP_MAT = new THREE.MeshBasicMaterial({ color: 0xf0e9d8 });
 const BANNER_CLOTH_MAT = new THREE.MeshStandardMaterial({ color: 0xe8e2d2, roughness: 0.9, metalness: 0,
   emissive: 0xe8e2d2, emissiveIntensity: 0.12, side: THREE.DoubleSide });
 const BANNER_SPOT_MAT = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.55, depthWrite: false });
+// Soul-signs around the planted banner (echo summoning): a gold rune ring at
+// the summon radius, a slow-turning class-colored sigil, the name overhead.
+const SIGN_RING_MAT = new THREE.MeshBasicMaterial({ color: 0xd8b85a, transparent: true, opacity: 0.5,
+  blending: THREE.AdditiveBlending, depthWrite: false });
+const SIGN_GLYPH_GEO = new THREE.OctahedronGeometry(0.32);
+const signGlyphMats = new Map(); // cached per class (3 entries), never per-sign
+const signGlyphMat = (cls) => {
+  if (!signGlyphMats.has(cls)) {
+    signGlyphMats.set(cls, new THREE.MeshBasicMaterial({
+      color: new THREE.Color(CLASSES[cls]?.color || '#ffffff'), transparent: true, opacity: 0.9,
+    }));
+  }
+  return signGlyphMats.get(cls);
+};
 const FOCUS_RING_MAT = new THREE.MeshBasicMaterial({ color: 0xff3347, transparent: true, opacity: 0.6, depthWrite: false });
 const WELL_MATS = {
   ward: {
@@ -231,6 +266,12 @@ export function buildEntityWarmup() {
   g.add(new THREE.Mesh(BANNER_CLOTH_GEO, BANNER_CLOTH_MAT));
   g.add(new THREE.Mesh(WELL_RING_GEO, BANNER_SPOT_MAT));
   g.add(new THREE.Mesh(WELL_RING_GEO, FOCUS_RING_MAT));
+  g.add(new THREE.Mesh(WELL_RING_GEO, SIGN_RING_MAT));
+  g.add(new THREE.Mesh(SIGN_GLYPH_GEO, signGlyphMat('gunslinger')));
+  // pre-raster + upload every roster echo's name tag: the banner plant builds
+  // five sign tags in one frame and the first summon builds a guardian tag —
+  // none of those may pay a canvas raster or texture upload mid-session
+  for (const r of BOTS.roster) g.add(makeNameTag(r.name, CLASSES[r.cls]?.color || '#fff'));
   return g;
 }
 
@@ -289,6 +330,7 @@ export class EntityManager {
     this.wells = new Map();
     this.capsules = new Map();
     this.keyDrops = new Map();
+    this.signs = new Map(); // echo soul-signs (LOBBY, banner planted)
     this.chestMesh = null;
     this.banner = null;
     // white circle marking where the rally banner can be planted; lives in the
@@ -313,7 +355,7 @@ export class EntityManager {
       seenP.add(p.id);
       let v = this.guardians.get(p.id);
       if (!v) {
-        v = { ...buildGuardian(p.name, p.cls), interp: new Interp(), data: p };
+        v = { ...buildGuardian(p.name, p.cls, !!p.bt), interp: new Interp(), data: p };
         v.glow = this.glowPool.find(l => !l.userData.used) || null;
         if (v.glow) v.glow.userData.used = true;
         this.scene.add(v.g);
@@ -388,6 +430,22 @@ export class EntityManager {
       this.scene.add(grp);
       return { mesh: grp };
     }, (v, k) => { v.p = k.p; });
+
+    // echo soul-signs — summonable companion roster around the banner
+    this.syncSet(this.signs, snap.signs || [], (s) => {
+      const grp = new THREE.Group();
+      const ring = noRay(new THREE.Mesh(WELL_RING_GEO, SIGN_RING_MAT));
+      ring.scale.setScalar(BOTS.summonR);
+      ring.position.y = 0.04;
+      const glyph = noRay(new THREE.Mesh(SIGN_GLYPH_GEO, signGlyphMat(s.cls)));
+      glyph.position.y = 1.1;
+      const tag = makeNameTag(s.name, CLASSES[s.cls]?.color || '#fff');
+      tag.position.y = 2.0;
+      tag.scale.set(2.6, 0.49, 1);
+      grp.add(ring, glyph, tag);
+      this.scene.add(grp);
+      return { mesh: grp, glyph };
+    }, (v, s) => { v.p = s.p; });
 
     this.syncSet(this.wells, snap.wells, (w) => {
       const mats = WELL_MATS[w.k] || WELL_MATS.refuge;
@@ -524,6 +582,12 @@ export class EntityManager {
     for (const v of this.keyDrops.values()) {
       v.mesh.position.set(v.p[0], 1.0 + Math.sin(this.t * 2.5) * 0.2, v.p[2]);
       v.mesh.rotation.y += dt * 2.2;
+    }
+    if (this.signs.size) SIGN_RING_MAT.opacity = 0.4 + Math.sin(this.t * 2.2) * 0.15;
+    for (const v of this.signs.values()) {
+      v.mesh.position.set(v.p[0], 0, v.p[2]);
+      v.glyph.rotation.y += dt * 1.2;
+      v.glyph.position.y = 1.1 + Math.sin(this.t * 2 + v.p[0]) * 0.12;
     }
     if (this.chestMesh) this.chestMesh.rotation.y += dt * 0.5;
     if (this.bannerSpot.visible) this.bannerSpot.material.opacity = 0.4 + Math.sin(this.t * 2.5) * 0.18;

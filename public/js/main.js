@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { CLASSES, ARENA, PLAYER, ENC, ENEMIES, SUPER, WEAPONS, LOADOUT, MAX_PLAYERS } from '/shared/constants.js';
+import { CLASSES, ARENA, PLAYER, ENC, ENEMIES, SUPER, WEAPONS, LOADOUT, MAX_PLAYERS, BOTS, CLASS_SUPER } from '/shared/constants.js';
 import { Net } from './net.js';
 import { GameAudio } from './audio.js';
 import { buildWorld } from './world.js';
@@ -136,6 +136,7 @@ function spawnRemoteProj(from, dir, speed, color, { big = false, grav = false, w
   const warm = new THREE.Group();
   warm.add(buildEnemyWarmup(), buildEntityWarmup(), buildWeaponFxWarmup(),
     buildGuardian('WARMUP', 'gunslinger').g,
+    buildGuardian('WARMUP', 'voidcaller', true).g, // phantom (echo) materials must compile here too
     new THREE.Mesh(RPROJ_GEO, rprojMat(0xffaa33)), new THREE.Mesh(RPROJ_GEO_BIG, rprojMat(0x9d4edd)));
   warm.traverse(o => { o.raycast = () => {}; o.frustumCulled = false; });
   warm.position.set(0, 8, -10);
@@ -645,6 +646,12 @@ net.on('ammo', (m) => { if (weapons) weapons.addAmmo(m.kind); });
 // the super gauge is server-owned — the server fills it on the same interact;
 // bannerRallied gates the prompt so it stops offering a rally you've already taken
 net.on('banner', (m) => audio.bannerPlant(volAt(m.p)));
+// an echo guardian rises from its soul-sign — class-colored materialization
+// pillar (the server toast names them; no announce here)
+net.on('summon', (m) => {
+  effects.superFlare(new THREE.Vector3(m.p[0], 0, m.p[2]), CLASSES[m.cls]?.color || '#fff', 1.4, 0.8);
+  audio.superCast(CLASS_SUPER[m.cls] || 'ward');
+});
 net.on('restock', () => {
   bannerRallied = true;
   if (weapons) weapons.restock();
@@ -847,6 +854,12 @@ function updatePrompt() {
     if (snap.banner && !bannerRallied && dist2(snap.banner.p) < ENC.banner.restockR) {
       hud.prompt('PRESS <b>E</b> — RALLY AT THE STANDARD');
       return;
+    }
+    for (const s of snap.signs || []) {
+      if (dist2(s.p) < BOTS.summonR) {
+        hud.prompt(`PRESS <b>E</b> — SUMMON ${s.name.toUpperCase()} · ${(CLASSES[s.cls]?.name || '').toUpperCase()}`);
+        return;
+      }
     }
   }
   hud.prompt(null);

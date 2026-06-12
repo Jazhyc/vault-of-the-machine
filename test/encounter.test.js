@@ -1,7 +1,7 @@
 // Headless simulation of the full encounter with a fake clock — no browser, no sockets.
 import assert from 'node:assert';
 import { Game } from '../server/game.js';
-import { ARENA, ENC, ENEMIES, PLAYER, SUPER, MAX_PLAYERS, GRENADE, DMG_CAPS } from '../shared/constants.js';
+import { ARENA, ENC, ENEMIES, PLAYER, SUPER, MAX_PLAYERS, GRENADE, DMG_CAPS, BOTS } from '../shared/constants.js';
 import { rollSigil, SIGIL_SEGMENTS, maskOf } from '../shared/sigil.js';
 
 let msgs = [];
@@ -602,6 +602,44 @@ const slay = (g, id) => { while (g.enemies.has(id)) g.onMessage('p1', { t: 'hit'
   g.onMessage('p1', { t: 'hit', target: 'boss', dmg: 999999, weapon: 'nswarm' });
   assert.ok(before3 - g.enc.bossHp <= DMG_CAPS.nswarm, 'nova shard damage capped');
   ok('anti-cheat caps & nova gating');
+}
+
+// ---------- nova economy: a wave-wipe never refunds the super ----------
+{
+  const g = mkGame();
+  const p = g.addPlayer('p1', 'Economist', 'voidcaller');
+  moveTo(g, 'p1', [0, 0, 1]);
+  advance(g, ENC.readyTime + 0.5);
+  assert.equal(g.enc.st, 'MECH');
+  god(g);
+
+  // a dense pack, erased by the nova: zero gauge comes back (perKill on 20+
+  // adds used to be a near-full instant refund — perpetual novas)
+  const pack = [];
+  for (let i = 0; i < 10; i++) {
+    pack.push(g.spawnEnemy('husk', [10 + (i % 5), 0, 10 + Math.floor(i / 5) * 1.5]));
+  }
+  p.sup = 100;
+  g.onMessage('p1', { t: 'superCast', dir: [0, 0, -1] });
+  assert.equal(p.sup, 0, 'cast spends the gauge');
+  g.onMessage('p1', { t: 'explode', kind: 'nova', p: [12, 1, 10] });
+  assert.ok(pack.every(h => !g.enemies.has(h.id)), 'the nova erased the pack');
+  assert.equal(p.sup, 0, 'a 10-kill nova refunds nothing');
+
+  // the shards are nova-sourced too: nswarm hits and kills feed nothing
+  const aco = g.spawnEnemy('acolyte', [10, 0, 10]);
+  g.onMessage('p1', { t: 'hit', target: aco.id, dmg: 170, weapon: 'nswarm' });
+  assert.ok(!g.enemies.has(aco.id), 'a shard one-shots an acolyte');
+  assert.equal(p.sup, 0, 'nswarm damage and kills feed nothing');
+  g.enterDamage();
+  g.onMessage('p1', { t: 'hit', target: 'boss', dmg: 170, weapon: 'nswarm' });
+  assert.equal(p.sup, 0, 'shards on the boss feed nothing either');
+
+  // honest kills still pay out — the next nova is rebuilt the normal way
+  const honest = g.spawnEnemy('husk', [10, 0, 10]);
+  while (g.enemies.has(honest.id)) g.onMessage('p1', { t: 'hit', target: honest.id, dmg: 200, weapon: 'sniper' });
+  assert.ok(p.sup >= SUPER.perKill, 'ordinary kills still feed the gauge');
+  ok('nova economy: blast + shard kills refund nothing, honest kills still pay');
 }
 
 // ---------- in-flight ordnance survives the thrower going down ----------
@@ -1558,6 +1596,295 @@ const slay = (g, id) => { while (g.enemies.has(id)) g.onMessage('p1', { t: 'hit'
   g.resetWorld();
   assert.equal(g.enc.pillarsDown, false, 'resetWorld restores the pillars');
   ok('sweep pillar cover: shadows shelter until the FINAL crumble');
+}
+
+// ---------- echo guardians: soul-signs, summoning, rally, exclusions ----------
+{
+  const g = mkGame();
+  g.addPlayer('p1', 'Summoner', 'gunslinger');
+  g.broadcastSnapshot();
+  let snap = msgs.findLast(x => x.m.t === 'snap').m;
+  assert.deepEqual(snap.signs, [], 'no soul-signs before the banner');
+
+  // planting the standard rings it with one sign per roster echo
+  moveTo(g, 'p1', ENC.banner.pos);
+  g.onMessage('p1', { t: 'interact' });
+  g.broadcastSnapshot();
+  snap = msgs.findLast(x => x.m.t === 'snap').m;
+  assert.equal(snap.signs.length, BOTS.roster.length, 'one sign per unsummoned echo');
+  assert.ok(snap.signs.every(s => BOTS.roster.some(r => r.name === s.name && r.cls === s.cls)),
+    'signs carry the roster names and classes');
+
+  // an interact on a sign summons that echo as an ordinary player
+  msgs = [];
+  moveTo(g, 'p1', snap.signs[0].p);
+  g.onMessage('p1', { t: 'interact' });
+  assert.equal(g.players.size, 2, 'the echo joined the fireteam');
+  const bot = [...g.players.values()].find(p => p.bot);
+  assert.equal(bot.name, snap.signs[0].name, 'the named echo answered');
+  assert.ok(msgs.some(x => x.to === null && x.m.t === 'summon' && x.m.id === bot.id),
+    'summon broadcast for the materialization FX');
+  g.broadcastSnapshot();
+  snap = msgs.findLast(x => x.m.t === 'snap').m;
+  assert.equal(snap.signs.length, BOTS.roster.length - 1, 'its sign is spent');
+  assert.equal(snap.players.find(p => p.id === bot.id).bt, 1, 'snapshot flags the echo (phantom tint)');
+
+  // echoes rally at the standard on their own — full super at the pull
+  advance(g, 6);
+  assert.ok(bot.restocked, 'the echo rallied at the banner');
+  assert.ok(bot.sup >= 99, 'the rally filled its super gauge');
+
+  // summon the rest of the roster
+  for (let guard = 0; g.bots.signs.size > 0; guard++) {
+    assert.ok(guard < 10, 'roster summons terminate');
+    const s = [...g.bots.signs.values()][0];
+    moveTo(g, 'p1', s.p);
+    g.onMessage('p1', { t: 'interact' });
+  }
+  assert.equal(g.players.size, 1 + BOTS.roster.length, 'the full circle stands (cap 6)');
+
+  // dismissal: the newest echo yields (the join gate calls this for a human)
+  // and its sign returns while the banner stands
+  const lastBot = [...g.players.values()].filter(p => p.bot).pop();
+  assert.ok(g.bots.dismissNewest(), 'an echo yielded');
+  assert.ok(!g.players.has(lastBot.id), 'the NEWEST echo was the one dismissed');
+  assert.equal(g.bots.signs.size, 1, 'its sign returns');
+  moveTo(g, 'p1', [...g.bots.signs.values()][0].p);
+  g.onMessage('p1', { t: 'interact' });
+  assert.equal(g.players.size, MAX_PLAYERS, 'resummoned to a full circle');
+
+  // the human steps on the plate; the echoes converge and the raid starts,
+  // scaled for every body in the circle
+  moveTo(g, 'p1', [0, 0, 1]);
+  for (let i = 0; i < 400 && g.enc.st === 'LOBBY'; i++) g.tick(0.05);
+  assert.equal(g.enc.st, 'MECH', 'echoes joined the plate — the raid started');
+  assert.equal(g.enc.bossMax, ENC.bossBase + ENC.bossPerPlayer * (MAX_PLAYERS - 1),
+    'boss HP scales for the full circle');
+  god(g);
+
+  // echoes never touch the fireteam's pickups: key, capsule, ammo brick
+  const echo = [...g.players.values()].find(p => p.bot);
+  moveTo(g, 'p1', [0, 0, -20]); // keep the only human away from the bait
+  g.keys.set('kx', { p: [echo.pos[0], 0, echo.pos[2]] });
+  g.caps.set('cx', { p: [echo.pos[0], 0, echo.pos[2]], landAt: g.t - 1 });
+  g.bricks.set('bx', { kind: 'heavy', p: [echo.pos[0], 0, echo.pos[2]], until: g.t + 99 });
+  g.tickPlayers(0.05);
+  assert.ok(g.keys.has('kx') && !echo.hasKey, 'echoes never claim the auric key');
+  assert.ok(g.caps.has('cx') && echo.antiviral === 0, 'echoes never eat capsules');
+  assert.ok(g.bricks.has('bx'), 'echoes never eat ammo bricks');
+  g.keys.delete('kx'); g.caps.delete('cx'); g.bricks.delete('bx');
+  ok('echo guardians: signs → summon → rally → dismissal → plate start → pickup exclusions');
+}
+
+// ---------- echo guardians: revive claims + single-dome discipline ----------
+{
+  const g = mkGame();
+  g.addPlayer('p1', 'Anchor', 'gunslinger');
+  moveTo(g, 'p1', ENC.banner.pos);
+  g.onMessage('p1', { t: 'interact' });
+  for (const s of [...g.bots.signs.values()]) {
+    if (s.cls !== 'sentinel') continue;
+    moveTo(g, 'p1', s.p);
+    g.onMessage('p1', { t: 'interact' });
+  }
+  const titans = [...g.players.values()].filter(p => p.bot);
+  assert.equal(titans.length, 2, 'both sentinels answered');
+
+  moveTo(g, 'p1', [0, 0, 1]);
+  for (let i = 0; i < 400 && g.enc.st === 'LOBBY'; i++) g.tick(0.05);
+  assert.equal(g.enc.st, 'MECH');
+  god(g);
+  Object.assign(g.enc, {
+    nextWaveAt: g.t + 999, nextKeeperAt: g.t + 999, nextSeekerAt: g.t + 999, nextSpecialAt: g.t + 999,
+  });
+  g.clearAdds();
+  titans.forEach(p => { p.sup = 100; });
+
+  // down the human: a titan claims the revive, domes the body, channels — and
+  // the second titan holds its super (one dome at a time, fireteam-wide)
+  const p1 = g.players.get('p1');
+  moveTo(g, 'p1', [18, 0, 6]);
+  msgs = [];
+  g.downPlayer(p1);
+  assert.notEqual(g.enc.st, 'WIPE', 'living echoes keep the attempt alive');
+  advance(g, 14);
+  assert.ok(!p1.downed, 'an echo picked the guardian back up');
+  assert.ok(msgs.some(x => x.m.t === 'revived' && x.m.id === 'p1'), 'revive announced');
+  const wardCasts = msgs.filter(x => x.m.t === 'super' && x.m.kind === 'ward');
+  assert.equal(wardCasts.length, 1, `exactly one dome sheltered the revive (got ${wardCasts.length})`);
+  ok('echo sentinels: revive claim, dome on the body, second titan holds');
+}
+
+// ---------- echo guardians: class brains (pack nova, hoarded golden) ----------
+{
+  const g = mkGame();
+  g.addPlayer('p1', 'Speaker', 'sentinel');
+  moveTo(g, 'p1', ENC.banner.pos);
+  g.onMessage('p1', { t: 'interact' });
+  let warlockTaken = false;
+  for (const s of [...g.bots.signs.values()]) {
+    if (s.cls === 'sentinel') continue;
+    if (s.cls === 'voidcaller') {
+      if (warlockTaken) continue;
+      warlockTaken = true;
+    }
+    moveTo(g, 'p1', s.p);
+    g.onMessage('p1', { t: 'interact' });
+  }
+  const hunter = [...g.players.values()].find(p => p.bot && p.cls === 'gunslinger');
+  const warlock = [...g.players.values()].find(p => p.bot && p.cls === 'voidcaller');
+  assert.ok(hunter && warlock, 'one gunslinger + one voidcaller echo');
+
+  moveTo(g, 'p1', [0, 0, 1]);
+  for (let i = 0; i < 400 && g.enc.st === 'LOBBY'; i++) g.tick(0.05);
+  assert.equal(g.enc.st, 'MECH');
+  god(g);
+  Object.assign(g.enc, {
+    nextWaveAt: g.t + 999, nextKeeperAt: g.t + 999, nextSeekerAt: g.t + 999, nextSpecialAt: g.t + 999,
+  });
+  g.clearAdds();
+
+  // a swamping husk pack (over the addFill pressure gate) clumps in the open:
+  // the warlock answers with a nova; the gunslinger's golden never fires at
+  // adds (hoarded for the boss). 16 husks ≥ novaFill of the 3-player cap (20).
+  warlock.sup = 100;
+  hunter.sup = 100;
+  const [wx, wz] = (() => { const l = Math.hypot(warlock.pos[0], warlock.pos[2]) || 1;
+    return [warlock.pos[0] / l, warlock.pos[2] / l]; })();
+  const pc = [wx * 15, 0, wz * 15];
+  const pack = [];
+  for (let i = 0; i < 16; i++) {
+    pack.push(g.spawnEnemy('husk', [pc[0] + (i % 4) - 1.5, 0, pc[2] + Math.floor(i / 4) * 1.5 - 1.5]));
+  }
+  msgs = [];
+  advance(g, 1.5);
+  assert.ok(msgs.some(x => x.m.t === 'super' && x.m.kind === 'nova' && x.m.id === warlock.id),
+    'the warlock answers the pack with a nova');
+  assert.ok(!msgs.some(x => x.m.t === 'super' && x.m.kind === 'golden'),
+    'golden is hoarded while the boss is shielded');
+  advance(g, 4.5);
+  assert.ok(pack.every(h => !g.enemies.has(h.id)), 'the cluster is erased');
+
+  // the moment the boss lies bare, the hoarded golden answers and the burn begins
+  msgs = [];
+  g.enterDamage();
+  advance(g, 3);
+  assert.ok(msgs.some(x => x.m.t === 'super' && x.m.kind === 'golden' && x.m.id === hunter.id),
+    'golden answers the bare boss');
+  assert.ok(hunter.goldenUntil > g.t, 'the buff is live');
+  const before = hunter.stats.bossDmg;
+  advance(g, 8);
+  assert.ok(hunter.stats.bossDmg > before, 'the gunslinger pours damage into the boss');
+  assert.ok(g.enc.bossHp < g.enc.bossMax, 'the boss bar moved');
+  ok('echo class brains: pack nova, hoarded golden, boss burn');
+}
+
+// ---------- echo guardians: idle escort (no statues between waves) ----------
+{
+  const g = mkGame();
+  g.addPlayer('p1', 'Wanderer', 'gunslinger');
+  moveTo(g, 'p1', ENC.banner.pos);
+  g.onMessage('p1', { t: 'interact' });
+  for (let guard = 0; g.bots.signs.size > 0; guard++) {
+    assert.ok(guard < 10);
+    const s = [...g.bots.signs.values()][0];
+    moveTo(g, 'p1', s.p);
+    g.onMessage('p1', { t: 'interact' });
+  }
+  moveTo(g, 'p1', [0, 0, 1]);
+  for (let i = 0; i < 400 && g.enc.st === 'LOBBY'; i++) g.tick(0.05);
+  assert.equal(g.enc.st, 'MECH');
+  god(g);
+  Object.assign(g.enc, {
+    nextWaveAt: g.t + 999, nextKeeperAt: g.t + 999, nextSeekerAt: g.t + 999, nextSpecialAt: g.t + 999,
+  });
+  g.clearAdds();
+
+  // empty arena: the echoes regroup on the human wherever they walk
+  moveTo(g, 'p1', [20, 0, 10]);
+  advance(g, 8);
+  const bots = [...g.players.values()].filter(p => p.bot);
+  const p1 = g.players.get('p1');
+  assert.ok(bots.every(b => Math.hypot(b.pos[0] - p1.pos[0], b.pos[2] - p1.pos[2]) < 14),
+    'echoes gather around the idle guardian');
+  moveTo(g, 'p1', [-22, 0, -8]);
+  advance(g, 8);
+  assert.ok(bots.every(b => Math.hypot(b.pos[0] - p1.pos[0], b.pos[2] - p1.pos[2]) < 14),
+    'echoes follow when the guardian relocates');
+  ok('echo escort: the squad follows the fireteam between waves');
+}
+
+// ---------- echo guardians: full clear with the whole circle ----------
+{
+  const g = mkGame();
+  g.addPlayer('p1', 'Raidlead', 'gunslinger');
+  moveTo(g, 'p1', ENC.banner.pos);
+  g.onMessage('p1', { t: 'interact' });
+  for (let guard = 0; g.bots.signs.size > 0; guard++) {
+    assert.ok(guard < 10);
+    const s = [...g.bots.signs.values()][0];
+    moveTo(g, 'p1', s.p);
+    g.onMessage('p1', { t: 'interact' });
+  }
+  advance(g, 5); // echoes rally (full supers for the pull)
+  moveTo(g, 'p1', [0, 0, 1]);
+  for (let i = 0; i < 400 && g.enc.st === 'LOBBY'; i++) g.tick(0.05);
+  assert.equal(g.enc.st, 'MECH');
+  god(g);
+
+  // round-1 sigil dance, echoes fighting alongside
+  advance(g, ENC.firstKeeperDelay + 1.2);
+  assert.equal(g.enc.stage, 'KEEPERS');
+  const sig = g.enc.sigil;
+  sig.codes = [maskOf([0, 1, 2]), maskOf([6, 7, 8])];
+  for (const i of [0, 1, 2, 6, 7, 8]) g.onMessage('p1', { t: 'sigil', i });
+  advance(g, ENC.sigil.strikeDelay + 0.3);
+  assert.equal(g.enc.stage, 'HUNT', 'both wards broken with echoes in the field');
+  for (const id of [...g.enc.keeperIds]) if (id) slay(g, id);
+  const herald = keepersOf(g)[0];
+  assert.ok(herald && herald.sky, 'the herald rises');
+  const ped = ARENA.pedestals[herald.color];
+  moveTo(g, 'p1', [ped.p[0], 0, ped.p[2]]);
+  advance(g, 0.3); // kindle the wardbreaker
+  for (let guard = 0; g.enemies.has(herald.id); guard++) {
+    assert.ok(guard < 300, 'herald ward falls');
+    g.onMessage('p1', { t: 'hit', target: herald.id, dmg: 200, weapon: 'sniper' });
+    advance(g, 0.05);
+  }
+  advance(g, ENC.sigil.missileFall + 0.3);
+  assert.equal(g.enc.st, 'DAMAGE', 'lance impact with the circle intact');
+
+  // the echoes burn the boss on their own (supers were rallied full)
+  const botDmg = () => [...g.players.values()].filter(p => p.bot)
+    .reduce((s, p) => s + p.stats.bossDmg, 0);
+  advance(g, 10);
+  assert.ok(botDmg() > 2000, `echoes burn the boss unaided (got ${Math.round(botDmg())})`);
+
+  // ride the phase out through obliteration into round 2
+  while (g.enc.st === 'DAMAGE') advance(g, 0.25);
+  assert.equal(g.enc.st, 'OBLIT');
+  advance(g, ENC.oblitWarn + 0.3);
+  assert.equal(g.enc.st, 'MECH');
+  assert.equal(g.enc.round, 2);
+
+  // cheat to the final stand, survive the surge, kill it
+  g.enc.bossHp = g.enc.bossMax * ENC.finalFrac + 400;
+  g.enterDamage();
+  for (let i = 0; i < 3; i++) g.onMessage('p1', { t: 'hit', target: 'boss', dmg: 200, weapon: 'sniper' });
+  assert.equal(g.enc.st, 'FINAL');
+  advance(g, ENC.surgeDur + 1);
+  assert.ok(!g.enc.shield, 'the generator died with the echoes still standing');
+  for (let guard = 0; g.enc.bossHp > 0; guard++) {
+    assert.ok(guard < 2000);
+    g.onMessage('p1', { t: 'hit', target: 'boss', dmg: 200, weapon: 'sniper' });
+  }
+  assert.equal(g.enc.st, 'VICTORY');
+  const stats = msgs.findLast(x => x.m.t === 'bossDied').m.stats;
+  assert.equal(stats.length, MAX_PLAYERS, 'the scoreboard seats all six');
+  const contributors = [...g.players.values()].filter(p => p.bot && p.stats.bossDmg > 0).length;
+  assert.ok(contributors >= 4, `nearly every echo wounded the boss (got ${contributors})`);
+  advance(g, 2); // victory loiter ticks clean
+  ok('full clear with five echoes: mechanics, burn, obliteration, surge, victory');
 }
 
 console.log('\nAll encounter tests passed.');

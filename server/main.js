@@ -78,6 +78,8 @@ wss.on('connection', (ws) => {
     try { m = JSON.parse(buf.toString()); } catch { return; }
     if (!id) {
       if (m.t !== 'join') return;
+      // a full circle yields its newest echo before turning a guardian away
+      if (game.players.size >= MAX_PLAYERS) game.bots.dismissNewest();
       if (game.players.size >= MAX_PLAYERS) {
         ws.send(JSON.stringify({ t: 'full' }));
         return ws.close();

@@ -120,6 +120,11 @@ export const SUPER = {
   // Each shard one-shots an acolyte (160 hp); the wave's rim (falloff bottoms
   // at 0.45× → 270) still erases every ordinary add, so only keepers and
   // warded things survive the burst.
+  // ECONOMY: nothing nova-sourced (the blast OR the nswarm shards) ever feeds
+  // the caster's gauge — perKill on a 20+-add wipe was a near-full instant
+  // refund, i.e. perpetual novas (twin echo warlocks made the loop obvious).
+  // Enforced via killEnemy/applyBossDamage superCredit + the nswarm checks in
+  // onHit; the next nova is rebuilt the honest way (passive, gunfire, sigils).
   nova:   { kind: 'nova',   dmg: 600, r: 16, speed: 26, swarm: { n: 20, dmg: 170, speed: 20 } },
   golden: { kind: 'golden', dur: 9, mul: 3.5 },
   ward:   { kind: 'ward',   dur: 12, r: 5.5, heal: 45, dr: 0.5 },
@@ -306,3 +311,66 @@ export const ENC = {
 };
 
 export const MAX_PLAYERS = 6;
+
+// Echo Guardians: premade AI companions summoned from soul-signs that ring the
+// planted rally banner (LOBBY only). A bot is an ordinary entry in
+// game.players — same HP, same weapons, same DMG_CAPS, same revives — puppeted
+// server-side by server/bots.js. Their power lives in the heuristics, never in
+// stats: tune strength through `acc` (per-trigger-pull hit/crit chances),
+// not through damage numbers.
+export const BOTS = {
+  // Summon order = sign order around the banner. Two voidcallers for add
+  // clear, two sentinels for healing/wards, one gunslinger for boss damage.
+  // Kits are deliberately all different (and lore-nodded) — the loadout also
+  // shapes behavior via pickWeapon: a shotgun special wades in close, a
+  // sniper special holds the long band, an lmg heavy hoses the boss.
+  roster: [
+    // Praedyth's Timepiece + Praedyth's Revenge: the Vault's own pulse/sniper
+    { name: 'Praedyth',  cls: 'voidcaller', weapons: ['auto', 'sniper', 'rocket'] },
+    // the Shattered mystic walks INTO the dark: hand cannon + close talon
+    { name: 'Toland',    cls: 'voidcaller', weapons: ['hand', 'shotgun', 'rocket'] },
+    // Perfect Paradox — Saint-14 without a shotgun would be heresy
+    { name: 'Saint-14',  cls: 'sentinel',   weapons: ['auto', 'shotgun', 'lmg'] },
+    // Wei Ning held the Gap at range and crushed what got through
+    { name: 'Wei Ning',  cls: 'sentinel',   weapons: ['hand', 'sniper', 'lmg'] },
+    // the Ace of Spades, obviously
+    { name: 'Cayde-6',   cls: 'gunslinger', weapons: ['hand', 'sniper', 'rocket'] },
+  ],
+  signR: 4.4,   // soul-sign ring radius around the banner (outside restockR 3.2)
+  summonR: 2.4, // interact range on a sign
+  // Per-trigger-pull model: hit = the pull lands at all, crit = a landed pull
+  // crits. Tuned to ~75-85% of a competent human's sustained output on each
+  // weapon — companions help, they don't carry. The shotgun lands pelletFrac
+  // of its pellets per hit (the client aggregates pellets per pull the same way).
+  acc: {
+    auto:    { hit: 0.70, crit: 0.30 },
+    hand:    { hit: 0.75, crit: 0.45 },
+    sniper:  { hit: 0.85, crit: 0.50 },
+    shotgun: { hit: 0.85, crit: 0.20 },
+    lmg:     { hit: 0.65, crit: 0.25 },
+  },
+  pelletFrac: 0.8,
+  // Echoes must help clear, not vacuum the arena. Versus ordinary adds they
+  // fight at a human rhythm: a reaction beat on every target switch (each
+  // kill costs a re-aim, so chains never read as instant), burst-then-settle
+  // trigger discipline, and a tracking penalty against small strafing bodies.
+  // Boss fire and seeker defense are exempt — the boss is the job, and
+  // seekers are perfect-tracking ordnance that must die on reflex.
+  react: [0.35, 0.8],   // aim-settle seconds whenever the target changes
+  addAcc: 0.75,         // hit-chance multiplier vs husks/acolytes/wisps
+  burst: { auto: 8, lmg: 10, hand: 3, sniper: 2, shotgun: 2 }, // pulls per burst vs adds
+  burstRest: [0.5, 1.1], // settle seconds between those bursts
+  spreadFire: 12,       // target-score penalty per other echo already on it
+  retarget: 0.3,   // target re-evaluation cadence (s)
+  rocketCd: 4.5,   // self-imposed rocket spacing (mag 1 + reload ≈ this anyway)
+  // a voidcaller spends its nova on adds only when the arena is genuinely
+  // swamped (live-add fill ≥ novaFill of the per-player cap) AND the densest
+  // cluster holds at least novaAdds small enemies within novaR; otherwise the
+  // super is banked for the boss. 0.75 sits above a single full wave (~0.66
+  // of the cap at 6 players) on purpose — a fresh wave merely existing is not
+  // "too many enemies"; overlapping waves or a failing clear is.
+  novaFill: 0.75, novaAdds: 4, novaR: 7,
+  novaStagger: 6,  // second warlock holds its nova this long after the first
+  meleeBand: 6,    // a husk inside this range triggers the kite-away steering
+  dodgeAhead: 0.7, // seconds of projectile look-ahead for the sidestep reflex
+};

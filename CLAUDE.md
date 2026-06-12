@@ -52,7 +52,10 @@ nova, swarm shards) — going down must not void it mid-flight (regression-teste
 damage path needs a cap or validation server-side, and ideally a test like the existing
 "anti-cheat caps & nova gating" block. The Nova detonation also looses 20 thrower-client homing
 shards (`SUPER.nova.swarm`, the wolfpack/swarm machinery in weapons.js) landing as ordinary
-capped `nswarm` hits — the budget rationale is commented on `SUPER.nova`. All homing payloads
+capped `nswarm` hits — the budget rationale is commented on `SUPER.nova`. Nothing nova-sourced
+(blast or shards) ever feeds the caster's super gauge (`superCredit` in
+`killEnemy`/`applyBossDamage` + the `nswarm` checks in `onHit`): perKill on a 20+-add wave wipe
+was a near-full instant refund — perpetual novas. All homing payloads
 (nova shards, gunslinger embers, gjally wolfpack) fly only on the thrower's client; every OTHER
 client replays them **cosmetically** (`cosmetic` flag through the wolf machinery — same flight
 and homing against that client's enemy views, boom on arrival, but no `hit`, no damage numbers,
@@ -126,7 +129,10 @@ messages; a broadcast with `exclude: playerId` skips the sender (stripped in `se
 Client→server: `state`, `fire`, `hit`, `explode`, `superCast`, `interact`, `loadout`, and
 `sigil {i}` (toggle sky-lattice node i; validated st/stage/index server-side). Snapshot player
 fields are abbreviated: `p` pos, `dn` downed, `dd` dead, `gu` goldenUntil, `av` antiviral stacks,
-`ky` holds auric key, `wb` wardbreaker-buff end, `rv/rt` revive end/target, `sup` super %. `enc.focus` is the hard-focused
+`ky` holds auric key, `wb` wardbreaker-buff end, `rv/rt` revive end/target, `sup` super %,
+`bt` echo-guardian flag (clients render those as gold phantoms). The snapshot also carries
+`signs` (id-keyed `{name, cls, p}` soul-signs, LOBBY-only), and `summon {id, name, cls, p}` is
+a one-shot broadcast (class-colored flare client-side; the server toast names the echo). `enc.focus` is the hard-focused
 player id (DAMAGE only) and `enc.bossYaw` is the server-owned boss facing (clients lerp to it —
 every client must see the same back side); `enc.stage` is the MECH sub-stage, `enc.wh/mAt` the
 wormhole flag and missile-impact time, `enc.sg` the generator-surge end time (the HUD's
@@ -164,6 +170,55 @@ blisters"), and keep each message to ~2–4 words (names/colors/numbers don't co
 a server toast and a client announce for the same event — events with a client-side announce
 (bossWake, bossFocus, sweep, barrage, sigilMatch, heraldRise, wormhole, bossDied, state
 changes) get no server toast. Status readouts (lock names, code counts, timers) stay.
+
+### Echo Guardians (AI companions — server/bots.js)
+
+Premade bots (roster + tuning in `BOTS`, shared/constants.js): two voidcallers (add clear), two
+sentinels (heals/wards/revives), one gunslinger (boss DPS), wearing Destiny lore names. **A bot
+is an ordinary `game.players` entry** (`p.bot` flag) puppeted by `BotManager` inside `tick(dt)`
+— no `Date.now()`, fully exercised by the headless tests. Every action routes through the SAME
+validated handlers a human client drives (`onHit`/`onExplode`/`onSuperCast`/`onInteract`), so
+`DMG_CAPS`, ward/blister gates, and phase checks apply automatically, and clients render bots
+through the ordinary remote-player path (snapshot `bt` → shared phantom-gold suit materials in
+`buildGuardian`). Strength is tuned ONLY through the `BOTS` knobs — never through stats — and
+per-player encounter scaling deliberately counts bots. `acc` sets per-trigger-pull hit/crit;
+add-clear is further humanized (echoes must help, not vacuum the arena) by `react` (aim-settle
+beat on every target switch — each kill costs a re-aim), `burst`/`burstRest` (trigger
+discipline vs small adds), `addAcc` (tracking penalty vs strafing bodies), and `spreadFire`
+(score penalty that splits the squad's fire across targets). Boss fire, keepers, and seeker
+defense are exempt from the discipline by design.
+
+Summoning: planting the banner rings it with soul-signs (`refreshSigns`, snapshot `signs`,
+interact → `trySummon`, LOBBY-only). A human joining a full server evicts the newest echo
+(`dismissNewest` in the main.js join gate, ties resolve to the latest summon); the last human
+leaving dismisses them all (`removePlayer`). Bots persist across wipe/victory resets and
+re-rally at the next banner.
+
+Hard exclusions — bots never do mechanics: the `tickPlayers` pickup blocks (bricks/capsules/
+keys) are gated `!p.bot`, chest loot likewise, they never send `sigil`, and `pickTarget` skips
+warded enemies and blisters. They CAN be boss-focused, body-block seekers, and revive/be
+revived — all humans downed with bots still standing is deliberately NOT a wipe (the echoes
+pick you up; humans only reach `dead` via startWipe, so no soft-lock).
+
+Bot fire is simulated server-side (cadence + mag/reload pauses from `WEAPONS`, `losBlocked`
+LOS) and each pull broadcasts the same `pf` relay as human fire. Thrown ordnance resolves as
+scheduled blasts through `onExplode` (rockets; grenades; the nova at cast-apex + flight time);
+homing payloads (nova shards / gunslinger embers) are applied by the server as capped
+`nswarm`/`gswarm` hits over time (`resolveSwarms`, mirroring the client's
+`acquireSwarmTargets`) while every client replays them cosmetically off the `explosion`
+broadcast — a bot has no thrower client, so nobody is excluded and the existing spectator
+machinery simply runs on every screen.
+
+Class brains + squad blackboard: golden is hoarded and cast the moment the boss lies bare
+(`onBossExposed` — fired on DAMAGE entry AND the FINAL surge collapse); novas answer a
+≥`novaAdds` cluster or the bare boss, staggered between warlocks (`board.novaAt`); sentinels
+keep ONE ward dome fireteam-wide (checked against live `wells`), dome a claimed revive, and
+emergency-dome OBLIT when no well was woken (any well kind shelters the blast). Revives are
+claim-based (`board.revive`, sentinels favored) so bots never dogpile one body. Movement is
+server-written pos/vel — `leadAim` and sniper locks work against bots — with server-written hop
+arcs like the husk pounce: pillar-shadow sweep cover, timed beam jumps once `pillarsDown`,
+sniper-lock braking, seeker sprint-aways, lateral husk kiting, slam-radius avoidance, banner
+rally, and plate walk-on whenever a human stands on the ready plate.
 
 ### Encounter state machine (server)
 

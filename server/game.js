@@ -4,6 +4,7 @@ import {
   ARENA, PLAYER, ENEMIES, ENC, SUPER, CLASS_SUPER, DMG_CAPS, GRENADE, WEAPONS, CLASSES,
 } from '../shared/constants.js';
 import { rollSigil } from '../shared/sigil.js';
+import { BotManager } from './bots.js';
 
 let nextId = 1;
 const nid = () => String(nextId++);
@@ -21,6 +22,7 @@ export class Game {
     this.snapAcc = 0;
     this.gjallyOwners = new Set(); // guardian names that looted the cache; survives resetWorld
     this.onUnlock = null;          // hook(name) for the host process to persist unlocks
+    this.bots = new BotManager(this); // Echo Guardian companions (server/bots.js)
     this.resetWorld();
   }
 
@@ -63,6 +65,7 @@ export class Game {
       barrageDir: 1, barrageBeatN: 0,
       nextSpecialAt: 0, specialFlip: false,
     };
+    this.bots.onWorldReset(); // pending bot ordnance/claims die with the world
   }
 
   resetToLobby(reason = 'wipe') {
@@ -80,9 +83,9 @@ export class Game {
 
   // ---------- players ----------
 
-  addPlayer(id, name, cls) {
+  addPlayer(id, name, cls, bot = false) {
     const p = {
-      id, name: String(name).slice(0, 16) || 'Guardian', cls,
+      id, name: String(name).slice(0, 16) || 'Guardian', cls, bot,
       pos: [...ARENA.spawn], yaw: ARENA.spawnYaw, pitch: 0,
       hp: PLAYER.maxHp, lastDmg: -99, downed: false, dead: false,
       sup: 0, goldenUntil: 0, pendingNova: false, castUntil: 0,
@@ -92,7 +95,7 @@ export class Game {
       stats: { kills: 0, bossDmg: 0, keepers: 0 },
     };
     this.players.set(id, p);
-    this.toast(`${p.name} joined`, 'info');
+    if (!bot) this.toast(`${p.name} joined`, 'info'); // summons announce themselves
     return p;
   }
 
@@ -101,8 +104,17 @@ export class Game {
     if (!p) return;
     if (p.hasKey) this.keys.set(nid(), { p: [p.pos[0], 0, p.pos[2]] });
     this.players.delete(id);
-    this.toast(`${p.name} left`, 'info');
-    if (this.players.size === 0) { this.resetWorld(); return; }
+    this.bots.onRemoved(id);
+    this.toast(p.bot ? `${p.name} fades.` : `${p.name} left`, 'info');
+    // echoes can't hold the vault alone — the last human out dismisses them all
+    if (![...this.players.values()].some(q => !q.bot)) {
+      for (const q of [...this.players.values()]) {
+        this.players.delete(q.id);
+        this.bots.onRemoved(q.id);
+      }
+      this.resetWorld();
+      return;
+    }
     if (this.enc.st !== 'LOBBY') this.checkWipe();
   }
 
@@ -159,7 +171,7 @@ export class Game {
     const cap = (DMG_CAPS[m.weapon] || 90) * (p.goldenUntil > this.t ? SUPER.golden.mul * 1.05 : 1);
     dmg = Math.min(dmg, cap);
     if (m.target === 'boss') {
-      this.applyBossDamage(dmg, p);
+      this.applyBossDamage(dmg, p, m.weapon !== 'nswarm');
     } else {
       const e = this.enemies.get(String(m.target));
       if (!e) return;
@@ -176,8 +188,10 @@ export class Game {
         return;
       }
       e.hp -= dmg;
-      if (p.goldenUntil <= this.t) this.gainSuper(p, dmg * SUPER.perDamage);
-      if (e.hp <= 0) this.killEnemy(e, p);
+      // nswarm = nova shards: the super must never feed its own gauge (see
+      // the SUPER.nova comment — the wave-wipe → full-refund loop is banned)
+      if (p.goldenUntil <= this.t && m.weapon !== 'nswarm') this.gainSuper(p, dmg * SUPER.perDamage);
+      if (e.hp <= 0) this.killEnemy(e, p, m.weapon !== 'nswarm');
     }
   }
 
@@ -224,11 +238,11 @@ export class Game {
       if (d > r) continue;
       const dealt = dmg * (1 - 0.55 * d / r);
       e.hp -= dealt; total += dealt;
-      if (e.hp <= 0) this.killEnemy(e, p);
+      if (e.hp <= 0) this.killEnemy(e, p, m.kind !== 'nova'); // nova kills refund nothing
     }
     // The boss is a big floating body — direct hits land on its surface.
     const bossReach = r + (m.kind === 'nova' ? 2.5 : 2);
-    if (d3(pos, ENC.bossPos) < bossReach && this.applyBossDamage(dmg, p)) total += dmg;
+    if (d3(pos, ENC.bossPos) < bossReach && this.applyBossDamage(dmg, p, m.kind !== 'nova')) total += dmg;
     if (m.kind !== 'nova') this.gainSuper(p, total * SUPER.perDamage);
     this.send(null, { t: 'explosion', p: pos, kind: m.kind, by: p.id, exclude: p.id });
   }
@@ -272,6 +286,7 @@ export class Game {
         this.banner = { p: [...B.pos], by: p.name };
         this.send(null, { t: 'banner', p: this.banner.p, by: p.name });
         this.toast(`${p.name} plants the standard`, 'good');
+        this.bots.refreshSigns(); // soul-signs ring the planted standard
         return;
       }
       if (this.banner && !p.restocked && dxz(p.pos, this.banner.p) < B.restockR) {
@@ -280,10 +295,12 @@ export class Game {
         this.send(p.id, { t: 'restock' });
         return;
       }
+      // an interact on a soul-sign summons that echo (server/bots.js)
+      if (this.bots.trySummon(p)) return;
     }
     // Loot the chest — the raid exotic is always Gjallarhorn, and it belongs
-    // only to the guardians who actually claim it from the cache.
-    if (this.chest && !p.looted && dxz(p.pos, this.chest.p) < PLAYER.interactRange + 0.5) {
+    // only to the guardians who actually claim it from the cache (never to echoes).
+    if (this.chest && !p.looted && !p.bot && dxz(p.pos, this.chest.p) < PLAYER.interactRange + 0.5) {
       p.looted = true;
       if (!this.gjallyOwners.has(p.name)) {
         this.gjallyOwners.add(p.name);
@@ -537,12 +554,12 @@ export class Game {
     this.send(null, { t: 'wormhole' });
   }
 
-  applyBossDamage(dmg, p) {
+  applyBossDamage(dmg, p, superCredit = true) {
     const e = this.enc;
     if (e.shield || e.bossDead || e.st === 'LOBBY') return false;
     if (p) p.stats.bossDmg += Math.min(dmg, e.bossHp); // overkill past 0 earns nothing
     e.bossHp = Math.max(0, e.bossHp - dmg);
-    if (p && p.goldenUntil <= this.t) this.gainSuper(p, dmg * SUPER.perDamage);
+    if (p && superCredit && p.goldenUntil <= this.t) this.gainSuper(p, dmg * SUPER.perDamage);
     if (e.bossHp <= 0) this.victory(p);
     else if (!e.final && e.bossHp <= e.bossMax * ENC.finalFrac) this.enterFinal();
     return true;
@@ -693,10 +710,13 @@ export class Game {
     return e;
   }
 
-  killEnemy(e, killer) {
+  // superCredit=false for nova-sourced kills (blast or nswarm shards): a
+  // wave-wipe must never refund the super that bought it — perKill on 20+
+  // erased adds was a near-full instant refund, i.e. perpetual novas.
+  killEnemy(e, killer, superCredit = true) {
     this.enemies.delete(e.id);
     if (killer) {
-      this.gainSuper(killer, SUPER.perKill);
+      if (superCredit) this.gainSuper(killer, SUPER.perKill);
       killer.stats.kills++;
       if (e.type === 'keeper') killer.stats.keepers++;
     }
@@ -1465,6 +1485,10 @@ export class Game {
         }
       }
 
+      // pickups are for the fireteam's hands only: an echo eating a capsule,
+      // brick, or the auric key would strand the mechanic (bots don't do
+      // mechanics, and they don't track ammo at all)
+      if (p.bot) continue;
       // ammo bricks
       for (const [bid, b] of this.bricks) {
         if (dxz(p.pos, b.p) < 1.9) {
@@ -1608,6 +1632,9 @@ export class Game {
       this.tickEnemies(dt);
       this.tickBoss(dt);
     }
+    // echo companions act in every state (lobby rallies, victory loiter, the
+    // works); their scheduled ordnance resolves here too
+    this.bots.tick(dt);
     // projectiles tick everywhere: mend-orbs must fly even in the lobby (enemy
     // shots only exist mid-fight anyway, and dmgPlayer gates LOBBY/VICTORY)
     this.tickProjectiles(dt);
@@ -1649,7 +1676,10 @@ export class Game {
         dn: p.downed, dd: p.dead, gu: p.goldenUntil,
         av: p.antiviral, ky: p.hasKey, wb: p.wardUntil,
         rv: p.revive ? p.revive.end : 0, rt: p.revive ? p.revive.target : null,
+        ...(p.bot ? { bt: 1 } : null), // echoes render as phantoms client-side
       })),
+      // soul-signs around the banner (LOBBY only) — summonable echo roster
+      signs: this.bots.signsSnapshot(),
       enemies: [...this.enemies.values()].map(en => ({
         id: en.id, ty: en.type, p: en.pos.map(v => Math.round(v * 100) / 100),
         yaw: Math.round(en.yaw * 100) / 100, hp: Math.round(en.hp), mh: en.maxHp,

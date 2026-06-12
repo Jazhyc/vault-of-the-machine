@@ -56,7 +56,10 @@ Knockback is client-computed where an FX broadcast allows it: the `bossSlam`/`se
 handlers in main.js shove the local player from their own live position (the server's view is an
 RTT stale) using the shared `kb` tuning (`ENC.slamKb`, `ENEMIES.*.kb`); the `hurt` message's
 `imp` is applied as an impulse only for sources without such an event (husk melee) and otherwise
-only aims the hurt-pan. Two client-side burst clamps tame TCP clumping at high ping (several
+only aims the hurt-pan. `bossWake` adds a harmless cinematic shockwave (`player.blast`, tuned by
+`ENC.wakeShove`): a lift plus a sustained outward wind, because the air blend bleeds velocity too
+fast for any one-shot impulse to carry a player from the plate to the arena edge (it bypasses the
+impulse budget — it's scripted, not a clumped hurt). Two client-side burst clamps tame TCP clumping at high ping (several
 messages landing in one frame): `player.impulse` budgets the per-frame summed shove
 (`PLAYER.kbFrameCap`) and `effects.shake` budgets per-frame growth.
 
@@ -197,9 +200,10 @@ the name to `game.gjallyOwners` (persisted as `{gjallyNames}` in `.unlocks.json`
 `game.onUnlock(name)`); victory alone unlocks nothing. After 30 s the encounter resets with
 `{t:'reset', reason:'victory'}`, sending clients back to the selection screen (same ws connection;
 class re-pick goes through the `loadout` message, weapons are purely client-side via
-`WeaponSystem.setLoadout`). The same selection screen is reachable mid-LOBBY: ESC from the pause
-overlay calls `showLoadoutScreen(false)` (the first ESC only releases pointer lock — the browser
-eats it), and the joined `deployBtn` branch redeploys on the same connection. The snap handler's
+`WeaponSystem.setLoadout`). The same selection screen is reachable mid-LOBBY: the rebindable
+`inventory` key (default TAB) calls `showLoadoutScreen(false)` — both in-game and from the pause
+overlay, since unlike ESC the browser doesn't eat it under pointer lock — and the joined
+`deployBtn` branch redeploys on the same connection. The snap handler's
 phase-transition block yanks a lingering selection screen back to the pause overlay if the
 fireteam plate-starts the raid (the open screen freezes `state` reports, so a player who escaped
 while standing on the plate still counts as ready). The Gjallarhorn must stay invisible in the UI unless that name owns it
@@ -251,6 +255,15 @@ Standing rules derived from the above:
   DevTools performance trace.
 
 ### Client invariants
+
+- **Controls are configurable** (`settings.js`): mouse sensitivity (multiplier over the 0.0023
+  base) and keybinds, persisted per-origin in localStorage `sv_settings` and edited from the
+  pause overlay's SETTINGS panel (markup in index.html, wiring in main.js). Never hardcode an
+  `e.code` for a player action — look it up via `code(action)` per event (player.js movement/jump,
+  weapons.js slots/abilities, main.js interact + inventory, hud.js help). Only ESC is `RESERVED`
+  (capture cancel) and can't be bound. Mutations fire a `'sv-settings'` window event;
+  `renderBindHints()` in main.js re-renders every bind-dependent hint string (lobby controlsHint,
+  HUD abilityHints/helpHint, the H overlay) — new hint text that names a key must go through it.
 
 - **Coplanar/overlay geometry**: the floor grid is vertex-colored strips (bright centerline
   fading to black edges — the gradient IS the glow) rendered with **additive blending +

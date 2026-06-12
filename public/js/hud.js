@@ -1,4 +1,5 @@
 import { CLASSES, ENC, PLAYER } from '/shared/constants.js';
+import { code } from './settings.js';
 
 const $ = (id) => document.getElementById(id);
 const fmt = (s) => {
@@ -34,7 +35,7 @@ export class Hud {
     this.vignetteLevel = 0;
     this.cache = {};
     addEventListener('keydown', (e) => {
-      if (e.code === 'KeyH' && document.pointerLockElement) this.el.help.classList.toggle('hidden');
+      if (e.code === code('help') && document.pointerLockElement) this.el.help.classList.toggle('hidden');
     });
   }
 

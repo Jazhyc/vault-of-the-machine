@@ -9,6 +9,7 @@ import { Effects } from './effects.js';
 import { LocalPlayer } from './player.js';
 import { WeaponSystem, buildViewmodel, buildWeaponFxWarmup } from './weapons.js';
 import { Hud } from './hud.js';
+import { ACTIONS, RESERVED, settings, code, keyLabel, setSens, setBind, resetControls } from './settings.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -283,24 +284,118 @@ document.addEventListener('pointerlockchange', () => {
   if (!$('lobbyScreen').classList.contains('hidden')) return; // selection screen owns the cursor
   const locked = !!document.pointerLockElement;
   $('resumeScreen').classList.toggle('hidden', locked);
-  if (!locked) {
+  if (locked) stopCapture(); // never leave a rebind capture armed in-game
+  else {
     $('resumeHint').textContent = getEnc()?.st === 'LOBBY'
-      ? 'Click to return · ESC to rebuild your loadout'
+      ? `Click to return · ${keyLabel(code('inventory'))} to rebuild your loadout`
       : 'Click to return to the fight';
   }
 });
-$('resumeScreen').onclick = () => renderer.domElement.requestPointerLock();
+$('resumeScreen').onclick = (e) => {
+  if (e.target.closest('#settingsPanel, #settingsBtn')) return; // panel clicks don't re-lock
+  renderer.domElement.requestPointerLock();
+};
 
 addEventListener('keydown', (e) => {
   // !e.repeat matters: held-E key-repeat used to restart the revive channel forever
-  if (e.code === 'KeyE' && !e.repeat && joined && document.pointerLockElement) net.interact();
-  // ESC from the pause overlay reopens the selection screen — lobby only. (The
-  // first ESC never reaches us: the browser eats it to release pointer lock.)
-  if (e.code === 'Escape' && joined && !document.pointerLockElement
+  if (e.code === code('interact') && !e.repeat && joined && document.pointerLockElement) net.interact();
+  // The inventory key (default TAB) reopens the selection screen — lobby
+  // only. Unlike ESC, the browser doesn't eat it under pointer lock, so it
+  // works mid-game AND from the pause overlay (showLoadoutScreen releases
+  // the lock itself).
+  if (e.code === code('inventory') && !e.repeat && joined
       && $('lobbyScreen').classList.contains('hidden') && getEnc()?.st === 'LOBBY') {
+    e.preventDefault(); // keep focus off browser chrome / hidden UI buttons
     showLoadoutScreen(false);
   }
 });
+
+// ---------- settings panel (pause overlay) ----------
+// Pure client config (see settings.js). The rebind capture listener runs in
+// the CAPTURE phase and stops propagation, so a captured press can never also
+// drive gameplay handlers or the TAB loadout shortcut.
+$('settingsBtn').onclick = () => { stopCapture(); $('settingsPanel').classList.toggle('hidden'); };
+
+let capturing = null; // { action, btn } while waiting for a key press
+function stopCapture() {
+  if (!capturing) return;
+  capturing.btn.classList.remove('listening');
+  capturing.btn.textContent = keyLabel(code(capturing.action));
+  capturing = null;
+}
+
+function renderBindRows() {
+  const rows = $('bindRows');
+  rows.textContent = '';
+  for (const [action, label] of ACTIONS) {
+    const row = document.createElement('div');
+    row.className = 'setRow';
+    const name = document.createElement('span');
+    name.className = 'setLabel';
+    name.textContent = label;
+    const btn = document.createElement('div');
+    btn.className = 'bindKey';
+    btn.textContent = keyLabel(code(action));
+    btn.onclick = () => {
+      const wasThis = capturing?.action === action;
+      stopCapture();
+      if (wasThis) return; // clicking the listening button cancels
+      capturing = { action, btn };
+      btn.classList.add('listening');
+      btn.textContent = 'PRESS KEY';
+    };
+    row.append(name, btn);
+    rows.appendChild(row);
+  }
+}
+renderBindRows();
+
+addEventListener('keydown', (e) => {
+  if (!capturing) return;
+  e.preventDefault();
+  e.stopPropagation();
+  if (e.code === 'Escape') { stopCapture(); return; }
+  if (RESERVED.has(e.code)) return; // unbindable key — keep listening
+  const { action } = capturing;
+  stopCapture();
+  setBind(action, e.code); // fires sv-settings → rows and hint text re-render
+}, true);
+
+const sensSlider = $('sensSlider'), sensVal = $('sensVal');
+function renderSens() {
+  sensSlider.value = settings.sensMult;
+  sensVal.textContent = `${settings.sensMult.toFixed(2)}×`;
+}
+renderSens();
+sensSlider.addEventListener('input', () => setSens(parseFloat(sensSlider.value)));
+
+$('bindReset').onclick = () => { stopCapture(); resetControls(); };
+
+// Every bind-dependent hint string in the static HTML, re-rendered from the
+// live binds (lobby controls hint, HUD ability hints, H help overlay).
+function renderBindHints() {
+  const L = (a) => keyLabel(code(a));
+  const move = ['forward', 'left', 'back', 'right'].map(L);
+  const moveStr = move.every((s) => s.length === 1) ? move.join('') : move.join(' ');
+  const b = (s) => `<b>${s}</b>`;
+  $('helpHint').textContent = `${L('help')} — CONTROLS`;
+  $('abilityHints').textContent = `${L('super')} SUPER · ${L('grenade')} GRENADE · ${L('melee')} MELEE`;
+  $('help').innerHTML =
+    `${b(moveStr)} move<br>${b(`${L('jump')} ×2`)} double jump<br>${b(L('sprint'))} sprint<br>` +
+    `${b('LMB')} fire<br>${b('RMB')} ADS<br>` +
+    `${b(`${L('weapon1')}/${L('weapon2')}/${L('weapon3')}`)} weapons<br>${b(L('reload'))} reload<br>` +
+    `${b(L('grenade'))} grenade<br>${b(L('melee'))} melee<br>${b(L('super'))} super<br>` +
+    `${b(L('interact'))} interact / revive<br>${b(L('inventory'))} inventory (lobby)`;
+  document.querySelector('.controlsHint').innerHTML =
+    `${b(moveStr)} move &nbsp; ${b(L('jump'))} jump (×2) &nbsp; ${b(L('sprint'))} sprint &nbsp; ` +
+    `${b('MOUSE')} aim / fire &nbsp; ${b('RMB')} aim-down-sights<br>` +
+    `${b(`${L('weapon1')} / ${L('weapon2')} / ${L('weapon3')}`)} or ${b('WHEEL')} swap weapons &nbsp; ` +
+    `${b(L('reload'))} reload &nbsp; ${b(L('grenade'))} grenade &nbsp; ${b(L('melee'))} melee &nbsp; ` +
+    `${b(L('super'))} super &nbsp; ${b(L('interact'))} interact / revive &nbsp; ` +
+    `${b(L('inventory'))} inventory &nbsp; ${b(L('help'))} help`;
+}
+renderBindHints();
+addEventListener('sv-settings', () => { renderBindRows(); renderSens(); renderBindHints(); });
 
 // ---------- liveliness sfx state ----------
 // crude distance attenuation: 1 at your feet, fading to 0.15 across the arena
@@ -501,7 +596,15 @@ net.on('barrage', () => {
   hud.announce('RHYTHMIC BARRAGE', 'KEEP THE BEAT');
   audio.volley();
 });
-net.on('bossWake', () => { audio.roar(); hud.announce('VAULTHUR AWAKENS', 'WATCHER OF THE DEEP'); });
+net.on('bossWake', () => {
+  audio.roar(); hud.announce('VAULTHUR AWAKENS', 'WATCHER OF THE DEEP');
+  // its rising hurls the fireteam off the plate — harmless, client-computed
+  // off our live position like bossSlam, but a sustained shockwave wind
+  if (player && player.alive) {
+    player.blast(ENC.bossPos, ENC.wakeShove);
+    effects.shake(1.0);
+  }
+});
 net.on('bossFocus', (m) => {
   audio.roar();
   if (m.id === net.myId) hud.announce('VAULTHUR MARKS YOU', 'ITS GAZE FINDS YOU');
@@ -644,10 +747,6 @@ function updatePrompt() {
       hud.prompt('PRESS <b>E</b> — RALLY AT THE STANDARD');
       return;
     }
-  }
-  if (snap.enc.st === 'LOBBY' && dist2([0, 0, 0]) > ENC.readyRadius) {
-    hud.prompt(`STAND ON THE CENTER PLATE TO BEGIN <b>(${snap.players.length} GUARDIAN${snap.players.length > 1 ? 'S' : ''})</b>`);
-    return;
   }
   hud.prompt(null);
 }

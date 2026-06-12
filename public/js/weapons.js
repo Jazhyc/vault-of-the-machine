@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { WEAPONS, GRENADE, MELEE, SUPER, ENC, CLASS_SUPER, CLASSES } from '/shared/constants.js';
+import { code } from './settings.js';
 
 const noRay = (o) => { o.traverse(c => { c.raycast = () => {}; }); return o; };
 
@@ -210,13 +211,13 @@ export class WeaponSystem {
     });
     addEventListener('keydown', (e) => {
       if (!document.pointerLockElement || e.repeat) return;
-      if (e.code === 'Digit1') this.switchTo(0);
-      if (e.code === 'Digit2') this.switchTo(1);
-      if (e.code === 'Digit3') this.switchTo(2);
-      if (e.code === 'KeyR') this.startReload();
-      if (e.code === 'KeyG') this.throwGrenade();
-      if (e.code === 'KeyV') this.melee();
-      if (e.code === 'KeyF') this.castSuper();
+      if (e.code === code('weapon1')) this.switchTo(0);
+      if (e.code === code('weapon2')) this.switchTo(1);
+      if (e.code === code('weapon3')) this.switchTo(2);
+      if (e.code === code('reload')) this.startReload();
+      if (e.code === code('grenade')) this.throwGrenade();
+      if (e.code === code('melee')) this.melee();
+      if (e.code === code('super')) this.castSuper();
     });
   }
 

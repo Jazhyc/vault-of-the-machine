@@ -80,6 +80,25 @@
     animation: breathe 1.3s ease-in-out infinite alternate; }
 
   #resumeScreen, #endScreen { background: rgba(7, 4, 12, 0.82); cursor: pointer; z-index: 60; }
+  /* settings panel on the pause overlay — clicks inside must not re-lock,
+     guarded in main.js's resumeScreen click handler */
+  #settingsBtn { font-size: 12px; letter-spacing: 4px; opacity: .6; border: 1px solid rgba(255,255,255,.25);
+    padding: 8px 26px; transition: all .15s; }
+  #settingsBtn:hover { opacity: 1; background: rgba(255,255,255,.08); }
+  #settingsPanel { margin-top: 20px; width: 400px; max-height: 56vh; overflow-y: auto; cursor: default;
+    border: 1px solid rgba(255,255,255,.18); background: rgba(10,6,18,.92); padding: 14px 22px; }
+  #settingsPanel .setRow { display: flex; align-items: center; gap: 10px; padding: 4px 0;
+    font-size: 11px; letter-spacing: 2px; }
+  #settingsPanel .setLabel { flex: 1; text-align: left; opacity: .65; }
+  #sensSlider { width: 130px; accent-color: var(--void); }
+  #sensVal { width: 46px; text-align: right; font-weight: 600; }
+  .bindKey { min-width: 88px; text-align: center; padding: 4px 10px; border: 1px solid rgba(255,255,255,.25);
+    background: rgba(255,255,255,.05); cursor: pointer; font-size: 11px; letter-spacing: 1px; transition: all .12s; }
+  .bindKey:hover { background: rgba(255,255,255,.12); }
+  .bindKey.listening { border-color: var(--amber); color: var(--amber);
+    animation: breathe .7s ease-in-out infinite alternate; }
+  #bindReset { margin-top: 12px; font-size: 10px; letter-spacing: 3px; opacity: .5; cursor: pointer; text-align: center; }
+  #bindReset:hover { opacity: 1; }
   #endScreen .title { font-size: 52px; }
   #endTitle.win { color: var(--amber); text-shadow: 0 0 40px var(--amber); }
   #endTitle.lose { color: var(--rose); text-shadow: 0 0 40px var(--rose); }
@@ -247,6 +266,16 @@
 <div id="resumeScreen" class="screen hidden">
   <div class="title" style="font-size:30px; letter-spacing:8px;">PAUSED</div>
   <div class="subtitle" id="resumeHint">Click to return to the fight</div>
+  <div id="settingsBtn">SETTINGS</div>
+  <div id="settingsPanel" class="hidden">
+    <div class="setRow">
+      <span class="setLabel">MOUSE SENSITIVITY</span>
+      <input type="range" id="sensSlider" min="0.2" max="3" step="0.05">
+      <span id="sensVal"></span>
+    </div>
+    <div id="bindRows"></div>
+    <div id="bindReset">RESET TO DEFAULTS</div>
+  </div>
 </div>
 
 <div id="endScreen" class="screen hidden">

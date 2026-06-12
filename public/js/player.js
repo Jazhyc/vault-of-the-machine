@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { PLAYER, ARENA } from '/shared/constants.js';
 import { collidePlayer } from './world.js';
+import { code, sens } from './settings.js';
 
 export class LocalPlayer {
   constructor(camera, net) {
@@ -8,7 +9,7 @@ export class LocalPlayer {
     this.net = net;
     this.pos = new THREE.Vector3(...ARENA.spawn);   // feet
     this.vel = new THREE.Vector3();
-    this.yaw = 0;   // face the arena center (spawn is at +Z; yaw 0 looks down −Z)
+    this.yaw = ARENA.spawnYaw;   // face the arena center
     this.pitch = 0;
     this.onGround = true;
     this.airJumps = 1;
@@ -17,12 +18,14 @@ export class LocalPlayer {
     this.lastGroundedAt = 0;    // coyote time: jump slightly after leaving ground
     this.baseFov = 72;
     this.fovTarget = this.baseFov;
-    this.sens = 0.0023;
     this.lastSent = 0;
     this.bobT = 0;
     this.recoilP = 0; this.recoilY = 0;   // applied camera recoil (chases the target)
     this.recoilTP = 0; this.recoilTY = 0; // recoil target — kicks add here, eases back to 0
     this.impBudget = PLAYER.kbFrameCap;   // per-frame knockback budget (see impulse)
+    this.windT = 0;                       // shockwave wind remaining (see blast)
+    this.windDir = [1, 0];
+    this.windAcc = 0;
 
     // mirrored server state
     this.hp = PLAYER.maxHp;
@@ -34,14 +37,15 @@ export class LocalPlayer {
     addEventListener('keydown', (e) => {
       if (e.repeat) return;
       this.keys.add(e.code);
-      if (e.code === 'Space') this.jumpBufferUntil = performance.now() / 1000 + 0.13;
+      if (e.code === code('jump')) this.jumpBufferUntil = performance.now() / 1000 + 0.13;
     });
     addEventListener('keyup', (e) => this.keys.delete(e.code));
     addEventListener('mousemove', (e) => {
       if (document.pointerLockElement) {
         const zoomScale = this.camera.fov / this.baseFov;
-        this.yaw -= e.movementX * this.sens * Math.max(0.35, zoomScale);
-        this.pitch -= e.movementY * this.sens * Math.max(0.35, zoomScale);
+        const s = sens();
+        this.yaw -= e.movementX * s * Math.max(0.35, zoomScale);
+        this.pitch -= e.movementY * s * Math.max(0.35, zoomScale);
         this.pitch = Math.max(-1.45, Math.min(1.45, this.pitch));
       }
     });
@@ -65,6 +69,20 @@ export class LocalPlayer {
   // Budgeted per frame (PLAYER.kbFrameCap, reset in update): TCP clumping at
   // high ping can deliver several shoves between frames; the sum is scaled
   // down so a clump never out-throws the strongest single hit.
+  // scripted shockwave (boss wake): an instant lift plus a wind that keeps
+  // pushing away from `from` for dur seconds. Deliberately bypasses the
+  // impulse budget — that cap tames clumped hurt messages, and a sustained
+  // force is the only way a shove can outrun the air blend's velocity bleed.
+  blast(from, { acc, lift, dur }) {
+    const dx = this.pos.x - from[0], dz = this.pos.z - from[2];
+    const d = Math.hypot(dx, dz);
+    this.windDir = d > 0.1 ? [dx / d, dz / d] : [1, 0];
+    this.windAcc = acc;
+    this.windT = dur;
+    this.vel.y = Math.max(this.vel.y, lift);
+    this.onGround = false;
+  }
+
   impulse(v) {
     const mag = Math.hypot(v[0], v[1], v[2]);
     if (mag < 0.001) return;
@@ -77,7 +95,8 @@ export class LocalPlayer {
   teleportToSpawn() {
     this.pos.set(...ARENA.spawn);
     this.vel.set(0, 0, 0);
-    this.yaw = 0; // face the arena center
+    this.windT = 0;
+    this.yaw = ARENA.spawnYaw; // face the arena center
     this.pitch = 0;
   }
 
@@ -86,15 +105,15 @@ export class LocalPlayer {
     const k = this.keys;
     let fx = 0, fz = 0;
     if (this.alive && document.pointerLockElement) {
-      if (k.has('KeyW')) fz += 1;
-      if (k.has('KeyS')) fz -= 1;
-      if (k.has('KeyA')) fx -= 1;
-      if (k.has('KeyD')) fx += 1;
+      if (k.has(code('forward'))) fz += 1;
+      if (k.has(code('back'))) fz -= 1;
+      if (k.has(code('left'))) fx -= 1;
+      if (k.has(code('right'))) fx += 1;
     }
     const len = Math.hypot(fx, fz) || 1;
     fx /= len; fz /= len;
 
-    const sprinting = k.has('ShiftLeft') && fz > 0.5;
+    const sprinting = k.has(code('sprint')) && fz > 0.5;
     this.sprinting = sprinting && Math.hypot(this.vel.x, this.vel.z) > 4; // for weapon carry anim
     const speed = sprinting ? PLAYER.sprint : PLAYER.walk;
 
@@ -106,6 +125,13 @@ export class LocalPlayer {
     const blend = Math.min(1, 13 * control * dt);
     this.vel.x += (wishX - this.vel.x) * blend;
     this.vel.z += (wishZ - this.vel.z) * blend;
+
+    // shockwave wind: applied after the blend so input can't cancel the ride
+    if (this.windT > 0) {
+      this.windT -= dt;
+      this.vel.x += this.windDir[0] * this.windAcc * dt;
+      this.vel.z += this.windDir[1] * this.windAcc * dt;
+    }
 
     // jump & double jump, with jump buffering + coyote time
     if (this.onGround) this.lastGroundedAt = now;

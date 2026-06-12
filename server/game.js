@@ -81,7 +81,7 @@ export class Game {
   addPlayer(id, name, cls) {
     const p = {
       id, name: String(name).slice(0, 16) || 'Guardian', cls,
-      pos: [...ARENA.spawn], yaw: 0, pitch: 0,
+      pos: [...ARENA.spawn], yaw: ARENA.spawnYaw, pitch: 0,
       hp: PLAYER.maxHp, lastDmg: -99, downed: false, dead: false, bleedAt: 0,
       sup: 0, goldenUntil: 0, pendingNova: false,
       antiviral: 0, hasKey: false, wardUntil: 0,

@@ -1,6 +1,10 @@
 // Shared between the Node server and the browser client (both ESM).
 const pol = (deg, r) => [Math.cos(deg * Math.PI / 180) * r, 0, Math.sin(deg * Math.PI / 180) * r];
 
+// spawn sits on the empty radial between two pillars (pedestals hold 90/210/330,
+// gates 30/150/270), so nothing crowds the fireteam's drop point
+const spawn = pol(60, 31);
+
 export const ARENA = {
   radius: 38,
   wallHeight: 16,
@@ -11,7 +15,8 @@ export const ARENA = {
     { p: pol(330, 28), name: 'AMBER', color: '#ffb703' },
   ],
   gates: [30, 150, 270].map(a => ({ p: pol(a, 35.5), ang: (a + 180) * Math.PI / 180 })),
-  spawn: [0, 0, 31],
+  spawn,
+  spawnYaw: Math.atan2(spawn[0], spawn[2]), // faces the arena center from spawn
 };
 
 export const PLAYER = {
@@ -154,9 +159,10 @@ export const ENC = {
   surgeDur: 30, surgeWaveCd: 2, surgeFirst: 1.5, surgeWaveGap: 0.45,
   waveCd: 18, addCapBase: 8, addCapPer: 4, firstKeeperDelay: 6,
   readyTime: 3, readyRadius: 4,
-  // rally banner: planted on the white circle near spawn during LOBBY only;
-  // each guardian can rally at it once for a full ammo/cooldown restock
-  banner: { pos: [4.5, 0, 26], placeR: 2.6, restockR: 3.2 },
+  // rally banner: planted on the white circle directly ahead of spawn (same
+  // radial, 6 m toward the center) during LOBBY only; each guardian can rally
+  // at it once for a full ammo/cooldown restock
+  banner: { pos: pol(60, 25), placeR: 2.6, restockR: 3.2 },
   // sky-sigil mechanic (MECH): twin warded keepers + the 3x3 star lattice.
   // Codes/segments live in shared/sigil.js; these are the spatial knobs.
   sigil: {
@@ -201,6 +207,12 @@ export const ENC = {
   // to cost constant attention, especially in round 1 when no specials exist.
   volleyCdMech: 5, volleyCdDmg: 3, volleyCdFinal: 2, volleyDmg: 30, volleySpeed: 22, volleySpread: 0.2,
   slamRange: 9.5, slamCd: 6, slamDmg: 45, slamKb: [14, 9], // kb: see ENEMIES
+  // boss-wake shockwave (harmless, cinematic): hurls the fireteam off the
+  // center plate toward the arena edge. A one-shot impulse can't carry that
+  // far (the client's air blend bleeds velocity at ~4.5/s), so this is a lift
+  // plus a sustained outward wind — acc m/s² for dur s lands a plate-stander
+  // around the spawn ring.
+  wakeShove: { acc: 130, lift: 12, dur: 1.2 },
   // seekers: homing missiles off the boss's back, active from round 1.
   // Perfect tracking is the threat; the counters are shooting them down (a
   // couple of body shots), feeding them a pillar/wall, or sprinting away —

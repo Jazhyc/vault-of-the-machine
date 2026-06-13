@@ -8,6 +8,10 @@ A browser-based, Destiny-style **1–6 player raid encounter**. One boss, real m
 supers, three weapons, and a raid-sized fireteam of up to six — but every mechanic is tuned
 to be **fully soloable**.
 
+[![Gameplay footage](https://img.youtube.com/vi/FIVakykEN9Y/maxresdefault.jpg)](https://www.youtube.com/watch?v=FIVakykEN9Y)
+
+*▶ Click the image above to watch gameplay footage on YouTube.*
+
 ## Just want to play? (Windows, zero install)
 
 Download **`vault-of-the-machine-win64.zip`** from the
